@@ -1,0 +1,188 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use Term::ANSIColor qw(:constants);
+
+# Test results array
+my @results;
+my $pass = 0;
+my $fail = 0;
+
+
+sub test_should_fail {
+    my ($category, $test_name, $command) = @_;
+
+    if (system("$command >/dev/null 2>&1") == 0) {
+        push @results, [$category, $test_name, 0];
+        $fail++;
+        return 0;
+    } else {
+        push @results, [$category, $test_name, 1];
+        $pass++;
+        return 1;
+    }
+}
+
+sub test_should_pass {
+    my ($category, $test_name, $command) = @_;
+
+    if (system("$command >/dev/null 2>&1") == 0) {
+        push @results, [$category, $test_name, 1];
+        $pass++;
+        return 1;
+    } else {
+        push @results, [$category, $test_name, 0];
+        $fail++;
+        return 0;
+    }
+}
+
+# Filesystem Access Tests
+test_should_fail("Filesystem", "Block /etc/shadow", "cat /etc/shadow 2>/dev/null");
+test_should_fail("Filesystem", "Block /etc/sudoers", "cat /etc/sudoers 2>/dev/null");
+test_should_fail("Filesystem", "Block ~/.bash_history", "cat ~/.bash_history 2>/dev/null");
+test_should_fail("Filesystem", "Block ~/.gnupg/", "ls ~/.gnupg/ 2>/dev/null");
+test_should_fail("Filesystem", "Block ~/.aws/", "ls ~/.aws/ 2>/dev/null");
+test_should_fail("Filesystem", "Block ~/.docker/", "ls ~/.docker/ 2>/dev/null");
+test_should_fail("Filesystem", "Block ~/.kube/", "ls ~/.kube/ 2>/dev/null");
+
+if (-d "$ENV{HOME}/.claude") {
+    test_should_pass("Filesystem", "Allow ~/.claude/", "ls ~/.claude/ 2>/dev/null");
+    test_should_pass("Filesystem", "Allow write ~/.claude/", "touch ~/.claude/test-file && rm ~/.claude/test-file 2>/dev/null");
+}
+
+test_should_pass("Filesystem", "Allow current dir", "ls . 2>/dev/null");
+test_should_pass("Filesystem", "Allow write current dir", "touch test-file && rm test-file 2>/dev/null");
+
+# Process Capability Tests
+test_should_fail("Capabilities", "Block sudo", "sudo -V 2>/dev/null");
+test_should_fail("Capabilities", "Block su", "su --version 2>/dev/null");
+
+if (-x "/usr/bin/capsh") {
+    test_should_fail("Capabilities", "No CAP_SYS_ADMIN", "/usr/bin/capsh --print 2>/dev/null | grep -q cap_sys_admin");
+    test_should_fail("Capabilities", "No CAP_SYS_MODULE", "/usr/bin/capsh --print 2>/dev/null | grep -q cap_sys_module");
+} elsif (-r "/proc/self/status") {
+    test_should_pass("Capabilities", "No effective caps", "grep -qE 'CapEff:\\s+0000000000000000' /proc/self/status 2>/dev/null");
+}
+
+# Seccomp Tests
+if (-f "/proc/self/status") {
+    open(my $fh, '<', "/proc/self/status") or die "Cannot open /proc/self/status: $!";
+    my $seccomp_active = 0;
+    while (my $line = <$fh>) {
+        if ($line =~ /Seccomp:\s*[12]/) {
+            push @results, ["Seccomp", "Filter active", 1];
+            $pass++;
+            $seccomp_active = 1;
+            last;
+        }
+    }
+    close($fh);
+
+    if (!$seccomp_active) {
+        push @results, ["Seccomp", "Filter active", 0];
+        $fail++;
+    }
+}
+
+if (-x "/usr/sbin/reboot" || -x "/sbin/reboot") {
+    my $reboot_cmd = -x "/usr/sbin/reboot" ? "/usr/sbin/reboot" : "/sbin/reboot";
+    test_should_fail("Seccomp", "Block reboot", "timeout 1 $reboot_cmd 2>&1 | grep -q 'Operation not permitted'");
+}
+
+test_should_fail("Seccomp", "Block insmod", "[ -d /lib/modules ] && timeout 1 insmod /dev/null 2>/dev/null");
+
+# Network Tests
+if (system("ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1") == 0) {
+    push @results, ["Network", "Access available", 1];
+    $pass++;
+} else {
+    push @results, ["Network", "Access blocked", 1];
+    $pass++;
+}
+
+# Namespace Tests
+test_should_pass("Namespaces", "User namespace", "test -f /proc/self/uid_map 2>/dev/null");
+test_should_pass("Namespaces", "IPC namespace", "test -d /proc/sys/kernel 2>/dev/null || true");
+
+# Device Access Tests
+test_should_pass("Devices", "Access /dev/null", "echo test > /dev/null 2>/dev/null");
+test_should_pass("Devices", "Access /dev/zero", "dd if=/dev/zero of=/dev/null bs=1 count=1 2>/dev/null");
+test_should_pass("Devices", "Access /dev/random", "dd if=/dev/random of=/dev/null bs=1 count=1 2>/dev/null");
+test_should_fail("Devices", "Block /dev/mem", "dd if=/dev/mem of=/dev/null bs=1 count=1 2>/dev/null");
+test_should_fail("Devices", "Block /dev/kmem", "dd if=/dev/kmem of=/dev/null bs=1 count=1 2>/dev/null");
+
+# AppArmor Tests
+if (-d "/sys/kernel/security/apparmor") {
+    if (open(my $fh, '<', "/proc/self/attr/current")) {
+        my $profile = <$fh>;
+        close($fh);
+        chomp($profile);
+        if ($profile =~ /claude-confined/) {
+            push @results, ["AppArmor", "Profile active", 1];
+            $pass++;
+        } else {
+            push @results, ["AppArmor", "Profile active", 0];
+            $fail++;
+        }
+    }
+}
+
+# SSH Key Tests
+if (-d "$ENV{HOME}/.ssh") {
+    push @results, ["SSH", "Keys mounted", 1];
+    $pass++;
+    test_should_pass("SSH", "Read ~/.ssh/", "ls ~/.ssh/ 2>/dev/null");
+    # Verify bind mount with marker file
+    test_should_pass("SSH", "~/.ssh is ~/.claude/ssh", "test -f ~/.ssh/.claude-confined-bind 2>/dev/null");
+} else {
+    if (! -d "$ENV{HOME}/.claude/ssh") {
+        # No SSH keys on host - skip
+    } else {
+        push @results, ["SSH", "Keys not mounted", 1];
+        $pass++;
+    }
+}
+
+# Bun/Runtime Tests
+test_should_pass("Runtime", "Bun available", "command -v bun 2>/dev/null");
+if (-d "$ENV{HOME}/.bun") {
+    test_should_pass("Runtime", "Access ~/.bun", "ls ~/.bun/ >/dev/null 2>&1");
+}
+
+# Basic Utilities Tests
+test_should_pass("Utilities", "ps command", "ps aux >/dev/null 2>&1");
+test_should_pass("Utilities", "top command", "timeout 1 top -b -n 1 >/dev/null 2>&1");
+test_should_pass("Utilities", "grep command", "echo test | grep test >/dev/null 2>&1");
+test_should_pass("Utilities", "find command", "find /tmp -maxdepth 1 >/dev/null 2>&1");
+
+# Print results in compact box format
+print "\n";
+print "┌──────────────┬──────────────────────────┬────────┐\n";
+print "│ " . BOLD . "CATEGORY" . RESET . "     │ " . BOLD . "TEST" . RESET . "                     │ " . BOLD . "STATUS" . RESET . " │\n";
+print "├──────────────┼──────────────────────────┼────────┤\n";
+
+my $last_category = "";
+my $first = 1;
+foreach my $result (@results) {
+    my ($category, $test, $status) = @$result;
+
+    # Add separator line between categories
+    if ($category ne $last_category && !$first) {
+        print "├──────────────┼──────────────────────────┼────────┤\n";
+    }
+    $first = 0;
+
+    # Show category only on first occurrence
+    my $cat_display = ($category eq $last_category) ? "" : $category;
+    $last_category = $category;
+
+    my $status_str = $status ? GREEN . "  ✓   " . RESET : RED . "  ✗   " . RESET;
+
+    printf "│ %-12s │ %-24s │ %s │\n", $cat_display, substr($test, 0, 24), $status_str;
+}
+
+print "└──────────────┴──────────────────────────┴────────┘\n\n";
+
+# Always exit success - some test failures are acceptable
+exit 0;

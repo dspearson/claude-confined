@@ -1,0 +1,315 @@
+#!/bin/bash
+# claude-confined - Run Claude Code in a bubblewrap sandbox
+# This script restricts Claude's access to the filesystem and system resources
+#
+# Usage: claude-confined [--allow PATH]... [--ro-allow PATH]... [claude-options]
+
+set -euo pipefail
+
+# Configuration
+CLAUDE_DIR="${HOME}/.claude"
+CLAUDE_TMP="${CLAUDE_DIR}/tmp"
+CLAUDE_CONFIG="${HOME}/.config/claude"
+
+# Arrays for additional paths
+declare -a ADDITIONAL_RW_PATHS=()
+declare -a ADDITIONAL_RO_PATHS=()
+
+# Debug mode - run arbitrary bash command instead of claude
+DEBUG_COMMAND=""
+
+# Add current working directory by default
+INITIAL_CWD=$(pwd -P)
+
+# Refuse to run if executed in user's $HOME or any parent directory of $HOME
+# This prevents granting access to the entire home directory or /home
+# Check if $HOME starts with $INITIAL_CWD (meaning CWD is at or above HOME)
+if [[ "${HOME}" == "${INITIAL_CWD}"* ]]; then
+    if [[ "${INITIAL_CWD}" == "${HOME}" ]]; then
+        echo "Error: refusing to run in \$HOME" >&2
+    else
+        echo "Error: refusing to run in a directory that would include sharing your entire \$HOME" >&2
+    fi
+    echo "Please cd to a specific project directory first." >&2
+    exit 1
+fi
+
+# Parse arguments
+CLAUDE_ARGS=()
+
+# Add --dangerously-skip-permissions if env var is set
+if [[ -n "${DANGEROUSLY_SKIP_PERMISSIONS:-}" ]]; then
+    CLAUDE_ARGS+=("--dangerously-skip-permissions")
+fi
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --allow)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --allow requires a path argument" >&2
+                exit 1
+            fi
+            shift
+            ADDITIONAL_RW_PATHS+=("$(realpath "$1")")
+            shift
+            ;;
+        --ro-allow)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --ro-allow requires a path argument" >&2
+                exit 1
+            fi
+            shift
+            ADDITIONAL_RO_PATHS+=("$(realpath "$1")")
+            shift
+            ;;
+        --bash)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --bash requires a command argument" >&2
+                exit 1
+            fi
+            shift
+            DEBUG_COMMAND="$1"
+            shift
+            ;;
+        --help)
+            cat <<EOF
+Usage: claude-confined [OPTIONS] [CLAUDE_ARGS...]
+
+Sandbox options:
+  --allow PATH        Allow read-write access to PATH (can be specified multiple times)
+  --ro-allow PATH     Allow read-only access to PATH (can be specified multiple times)
+  --bash COMMAND      Run arbitrary command in sandbox instead of claude (for debugging)
+  --help              Show this help message
+
+Environment variables:
+  DANGEROUSLY_SKIP_PERMISSIONS  If set, automatically pass --dangerously-skip-permissions to claude
+
+By default, the current working directory and ~/.claude are accessible.
+
+All other arguments are passed to claude.
+
+Examples:
+  claude-confined --allow /path/to/project
+  claude-confined --allow /home/user/project1 --ro-allow /home/user/docs
+  claude-confined --allow . chat
+  claude-confined --dangerously-skip-permissions
+  DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
+
+EOF
+            exit 0
+            ;;
+        *)
+            CLAUDE_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Ensure directories exist
+mkdir -p "${CLAUDE_DIR}"
+mkdir -p "${CLAUDE_TMP}"
+mkdir -p "${CLAUDE_CONFIG}"
+
+# Load global prompt if it exists
+GLOBAL_PROMPT_FILE="${CLAUDE_DIR}/global-prompt"
+if [[ -f "${GLOBAL_PROMPT_FILE}" ]]; then
+    GLOBAL_PROMPT_CONTENT=$(cat "${GLOBAL_PROMPT_FILE}")
+    if [[ -n "${GLOBAL_PROMPT_CONTENT}" ]]; then
+        CLAUDE_ARGS=("--append-system-prompt" "${GLOBAL_PROMPT_CONTENT}" "${CLAUDE_ARGS[@]}")
+    fi
+fi
+
+# Find bun
+BUN_BIN=$(command -v bun)
+if [ -z "${BUN_BIN}" ]; then
+    echo "Error: bun not found in PATH" >&2
+    exit 1
+fi
+
+# Find the Claude CLI script
+CLAUDE_BIN=$(command -v claude)
+if [ -z "${CLAUDE_BIN}" ]; then
+    echo "Error: claude not found in PATH" >&2
+    exit 1
+fi
+
+# Resolve to the actual CLI script
+CLAUDE_CLI=$(readlink -f "${CLAUDE_BIN}")
+
+# We'll run: bun <claude-cli> <args>
+BUN_REAL=$(readlink -f "${BUN_BIN}")
+
+# Build the bwrap command - start with base system bindings
+BWRAP_ARGS=(
+    --ro-bind /usr /usr
+    --ro-bind /lib /lib
+    --ro-bind /lib64 /lib64
+    --ro-bind /bin /bin
+    --ro-bind /sbin /sbin
+    --ro-bind /etc/resolv.conf /etc/resolv.conf
+    --ro-bind /etc/hosts /etc/hosts
+    --ro-bind /etc/ssl /etc/ssl
+    --ro-bind /etc/ca-certificates /etc/ca-certificates
+    --ro-bind /usr/share/terminfo /usr/share/terminfo
+    --proc /proc
+    --dev /dev
+    --tmpfs /tmp
+)
+
+# AppArmor integration
+if command -v aa-exec >/dev/null 2>&1 && [[ -d /sys/kernel/security/apparmor ]]; then
+    BWRAP_ARGS+=(--ro-bind /sys/kernel/security /sys/kernel/security)
+fi
+
+# Additional terminfo locations (conditional)
+[[ -d /lib/terminfo ]] && BWRAP_ARGS+=(--ro-bind /lib/terminfo /lib/terminfo)
+[[ -d /etc/terminfo ]] && BWRAP_ARGS+=(--ro-bind /etc/terminfo /etc/terminfo)
+
+# Bind user-specific paths (read-only)
+[[ -d "${HOME}/.bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.bin" "${HOME}/.bin")
+[[ -d "${HOME}/.config/emacs/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.config/emacs/bin" "${HOME}/.config/emacs/bin")
+[[ -d "${HOME}/.cargo/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.cargo/bin" "${HOME}/.cargo/bin")
+[[ -d "${HOME}/.rustup" ]] && BWRAP_ARGS+=(--bind "${HOME}/.rustup" "${HOME}/.rustup")
+[[ -d "${HOME}/.nix-profile/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.nix-profile/bin" "${HOME}/.nix-profile/bin")
+
+# JavaScript/Node runtimes
+[[ -d "${HOME}/.nvm" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.nvm" "${HOME}/.nvm")
+[[ -d "${HOME}/.bun" ]] && BWRAP_ARGS+=(--bind "${HOME}/.bun" "${HOME}/.bun")
+
+# Nix store and configuration (if exists)
+if [[ -d /nix ]]; then
+    BWRAP_ARGS+=(--ro-bind /nix /nix)
+    # Bind Nix configuration if it exists
+    [[ -f /etc/nix/nix.conf ]] && BWRAP_ARGS+=(--ro-bind /etc/nix/nix.conf /etc/nix/nix.conf)
+fi
+
+# Claude directories (read-write)
+BWRAP_ARGS+=(
+    --bind "${CLAUDE_DIR}" "${CLAUDE_DIR}"
+    --bind "${CLAUDE_TMP}" /tmp/claude
+)
+
+# Claude config (always bind if different from .claude)
+if [[ "${CLAUDE_CONFIG}" != "${CLAUDE_DIR}" ]]; then
+    mkdir -p "${CLAUDE_CONFIG}"
+    BWRAP_ARGS+=(--bind "${CLAUDE_CONFIG}" "${CLAUDE_CONFIG}")
+fi
+
+# Claude JSON config file
+if [[ -f "${HOME}/.claude.json" ]]; then
+    BWRAP_ARGS+=(--bind "${HOME}/.claude.json" "${HOME}/.claude.json")
+elif [[ ! -e "${HOME}/.claude.json" ]]; then
+    # Create empty file so it can be written to
+    touch "${HOME}/.claude.json"
+    BWRAP_ARGS+=(--bind "${HOME}/.claude.json" "${HOME}/.claude.json")
+fi
+
+# Bind ~/.claude/ssh to ~/.ssh (if exists)
+if [[ -d "${CLAUDE_DIR}/ssh" ]]; then
+    BWRAP_ARGS+=(--bind "${CLAUDE_DIR}/ssh" "${HOME}/.ssh")
+fi
+
+# Track paths already bound to avoid duplicates
+declare -A BOUND_PATHS
+BOUND_PATHS["${CLAUDE_DIR}"]=1
+BOUND_PATHS["${CLAUDE_TMP}"]=1
+BOUND_PATHS["${CLAUDE_CONFIG}"]=1
+
+# Add current working directory if not already bound
+if [[ ! -v BOUND_PATHS["${INITIAL_CWD}"] ]]; then
+    BWRAP_ARGS+=(--bind "${INITIAL_CWD}" "${INITIAL_CWD}")
+    BOUND_PATHS["${INITIAL_CWD}"]=1
+fi
+
+# Add additional read-write paths
+for path in "${ADDITIONAL_RW_PATHS[@]}"; do
+    if [[ ! -e "${path}" ]]; then
+        echo "Warning: Path does not exist: ${path}" >&2
+        continue
+    fi
+    if [[ ! -v BOUND_PATHS["${path}"] ]]; then
+        BWRAP_ARGS+=(--bind "${path}" "${path}")
+        BOUND_PATHS["${path}"]=1
+    fi
+done
+
+# Add additional read-only paths
+for path in "${ADDITIONAL_RO_PATHS[@]}"; do
+    if [[ ! -e "${path}" ]]; then
+        echo "Warning: Path does not exist: ${path}" >&2
+        continue
+    fi
+    if [[ ! -v BOUND_PATHS["${path}"] ]]; then
+        BWRAP_ARGS+=(--ro-bind "${path}" "${path}")
+        BOUND_PATHS["${path}"]=1
+    fi
+done
+
+# Add environment and namespace settings
+# Use user namespace with explicit UID/GID mapping to prevent dangerous remapping
+# This ensures UID 1000 inside maps to UID 1000 outside (no privilege escalation)
+CURRENT_UID=$(id -u)
+CURRENT_GID=$(id -g)
+
+BWRAP_ARGS+=(
+    --setenv TMPDIR /tmp/claude
+    --chdir "${INITIAL_CWD}"
+    --unshare-user
+    --uid "${CURRENT_UID}"
+    --gid "${CURRENT_GID}"
+    --unshare-ipc
+    --unshare-uts
+    --die-with-parent
+)
+
+# Environment variables are inherited by default in bwrap
+
+# Add seccomp filtering if available
+# Find the seccomp generator - check installed location first, then dev location
+SECCOMP_GENERATOR=""
+if [[ -x "${HOME}/.local/lib/claude-confined/generate-seccomp" ]]; then
+    SECCOMP_GENERATOR="${HOME}/.local/lib/claude-confined/generate-seccomp"
+else
+    # Try relative to script (for development)
+    SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    SECCOMP_DIR="${SCRIPT_DIR}/../seccomp"
+    if [[ -x "${SECCOMP_DIR}/generate-seccomp" ]]; then
+        SECCOMP_GENERATOR="${SECCOMP_DIR}/generate-seccomp"
+    elif [[ -x "${SECCOMP_DIR}/compile-seccomp.sh" ]]; then
+        # Try to compile if in dev environment
+        "${SECCOMP_DIR}/compile-seccomp.sh" 2>/dev/null || true
+        if [[ -x "${SECCOMP_DIR}/generate-seccomp" ]]; then
+            SECCOMP_GENERATOR="${SECCOMP_DIR}/generate-seccomp"
+        fi
+    fi
+fi
+
+# Use seccomp filter if available and kernel supports it
+# Test if seccomp is supported by checking /proc/sys/kernel/seccomp
+if [[ -n "${SECCOMP_GENERATOR}" ]] && [[ -e /proc/sys/kernel/seccomp ]]; then
+    # Generate BPF filter to temp file (process substitution unreliable with exec)
+    SECCOMP_FILTER=$(mktemp)
+    if "${SECCOMP_GENERATOR}" > "${SECCOMP_FILTER}" 2>/dev/null; then
+        # Pass BPF program via file descriptor 3
+        exec 3< "${SECCOMP_FILTER}"
+        BWRAP_ARGS+=(--seccomp 3)
+        # Clean up temp file after bwrap reads it (bwrap keeps FD open)
+        rm -f "${SECCOMP_FILTER}"
+    else
+        rm -f "${SECCOMP_FILTER}"
+    fi
+elif [[ -n "${SECCOMP_GENERATOR}" ]] && [[ ! -e /proc/sys/kernel/seccomp ]]; then
+    echo "Warning: Seccomp filtering unavailable (kernel not configured with CONFIG_SECCOMP)" >&2
+    echo "Continuing with bubblewrap + AppArmor protection only" >&2
+fi
+
+# Execute claude with all arguments using bwrap isolation
+# AppArmor profile is applied automatically via path-based profile matching
+# Run: bun <cli.js> <args>
+if [[ -n "${DEBUG_COMMAND}" ]]; then
+    # Debug mode - run arbitrary command
+    exec bwrap "${BWRAP_ARGS[@]}" /bin/bash -c "${DEBUG_COMMAND}"
+else
+    # Normal mode - run claude
+    exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" "${CLAUDE_CLI}" "${CLAUDE_ARGS[@]}"
+fi

@@ -1,0 +1,17 @@
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
+
+# Local development
+.claude/
+.envrc
+
+# Compiled seccomp filter generator
+seccomp/generate-seccomp

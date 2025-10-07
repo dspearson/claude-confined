@@ -1,0 +1,518 @@
+#!/usr/bin/env perl
+# Installation/uninstallation script for claude-confined
+# Usage: install [--uninstall] [--allow PATH]...
+
+use strict;
+use warnings;
+use Getopt::Long;
+use File::Spec;
+use File::Path qw(make_path remove_tree);
+use File::Copy;
+use File::Basename;
+use Cwd qw(abs_path);
+use Term::ANSIColor qw(:constants);
+
+# Configuration
+my $INSTALL_DIR = "$ENV{HOME}/.local/bin";
+my $SECCOMP_INSTALL_DIR = "$ENV{HOME}/.local/lib/claude-confined";
+my $APPARMOR_DIR = "/etc/apparmor.d";
+my $CLAUDE_DIR = "$ENV{HOME}/.claude";
+
+# Parse options
+my $help = 0;
+my $uninstall = 0;
+my @allowed_dirs = ();
+
+GetOptions(
+    'help|h' => \$help,
+    'uninstall' => \$uninstall,
+    'allow=s' => \@allowed_dirs,
+) or die "Error parsing options. Use --help for usage.\n";
+
+if ($help) {
+    print_help();
+    exit 0;
+}
+
+# Check if running as root
+if ($< == 0) {
+    die "Error: Do not run this script as root or with sudo\n" .
+        "Run as: install [options]\n" .
+        "The script will use sudo only when needed for privileged operations\n";
+}
+
+# Process allowed directories - resolve to absolute paths
+if (@allowed_dirs) {
+    @allowed_dirs = map { abs_path($_) // die "Error: Path does not exist: $_\n" } @allowed_dirs;
+}
+
+# Run uninstall or install
+if ($uninstall) {
+    do_uninstall();
+} else {
+    do_install(\@allowed_dirs);
+}
+
+exit 0;
+
+# ============================================================================
+# Installation
+# ============================================================================
+
+sub do_install {
+    my ($allowed_dirs_ref) = @_;
+
+    print <<'ASCII_ART';
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢀⣤⠶⠶⠟⠛⠛⠛⠛⠻⠿⠷⣶⣦⣄⡀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⣠⠞⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠻⢿⣷⣄⠀⠀⠀⠀⠀
+⠀⠀⠀⢠⡾⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣷⡀⠀⠀⠀
+⠀⠀⢠⡟⠀⠀⠀⠀⠀⢀⣠⣤⣴⠶⠶⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣄⠀⠀
+⠀⢀⣿⠁⠀⠀⠀⢀⣴⠟⠛⢿⣟⠛⢶⡀⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⡄
+⠀⢸⡏⠀⠀⠀⠀⣾⡇⠀⠀⠀⣿⠃⠈⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠇⠀     Claude
+⠀⢸⡇⠀⠀⠀⠀⢹⣇⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⡀⠀⠀⠀⠀⢰⣶⣦⠀    Confined
+⠀⠸⣧⠀⠀⠀⠀⠀⠻⣦⣀⠀⠀⠀⣀⣤⡾⠛⠉⠉⠉⠛⣷⡄⠀⠀⢈⡉⠋
+⠀⠀⢻⡆⠀⠀⠀⠀⠀⠈⠙⠛⠛⠛⠉⠁⠀⠀⠀⠀⠀⠀⢸⣷⠀⠀⣿⡿⠀
+⠀⠀⠈⢻⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣼⠇⠀⣸⣿⠃⠀
+⠀⠀⠀⠀⠻⣧⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⡾⠋⠀⣴⣿⠃⠀⠀⠀
+⠀⠀⠀⠀⠀⠈⠛⢷⣤⣀⠀⠀⠀⠀⠀⠀⠀⢀⣠⡾⠋⠀⣠⣾⣿⠏⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠛⠓⠶⠶⠶⠖⠛⠋⠁⠀⠀⣴⣿⣿⠃⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠁⠀⠀⠀⠀⠀⠀
+
+ASCII_ART
+
+    # AppArmor is mandatory - verify sudo access first before doing anything else
+    print "Checking sudo access... ";
+    if (system('sudo -v') != 0) {
+        print RED . "✗" . RESET . "\n";
+        early_exit("Error: sudo access required for AppArmor profile installation\nInstallation cannot proceed without sudo privileges");
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Check if gcc is installed (needed for seccomp compilation)
+    print "Checking for gcc... ";
+    unless (command_exists('gcc')) {
+        package_not_found('gcc',
+                         'sudo apt-get install gcc',
+                         'sudo dnf install gcc',
+                         'sudo pacman -S gcc');
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Check if libseccomp-dev is installed (needed for seccomp compilation)
+    print "Checking for libseccomp-dev... ";
+    # Test by trying to compile a minimal program
+    my $test_result = system('echo "#include <seccomp.h>\nint main(){return 0;}" | gcc -x c - -lseccomp -o /dev/null 2>/dev/null');
+    if ($test_result != 0) {
+        package_not_found('libseccomp-dev',
+                         'sudo apt-get install libseccomp-dev',
+                         'sudo dnf install libseccomp-devel',
+                         'sudo pacman -S libseccomp');
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Check if bubblewrap is installed
+    print "Checking for bubblewrap... ";
+    unless (command_exists('bwrap')) {
+        package_not_found('bubblewrap (bwrap)',
+                         'sudo apt-get install bubblewrap',
+                         'sudo dnf install bubblewrap',
+                         'sudo pacman -S bubblewrap');
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Check and install bun if not present
+    my $bun_installed_by_us = 0;
+    unless (command_exists('bun')) {
+        print "Installing bun... ";
+        if (command_exists('curl')) {
+            if (system('curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1') != 0) {
+                print RED . "✗" . RESET . "\n\n";
+                print "Error: Failed to install bun\n";
+                exit 1;
+            }
+            # Update PATH for this session
+            $ENV{BUN_INSTALL} = "$ENV{HOME}/.bun";
+            $ENV{PATH} = "$ENV{BUN_INSTALL}/bin:$ENV{PATH}";
+            $bun_installed_by_us = 1;
+            print GREEN . "✓" . RESET . "\n";
+        } else {
+            package_not_found('curl',
+                             'sudo apt-get install curl',
+                             'sudo dnf install curl',
+                             'sudo pacman -S curl');
+        }
+    } else {
+        print "Bun already installed ✓\n";
+    }
+
+    # Mark that we installed bun (for uninstall)
+    my $bun_dir = "$ENV{HOME}/.bun";
+    if ($bun_installed_by_us && -d $bun_dir) {
+        open(my $marker, '>', "$bun_dir/.installed-by-claude-confined")
+            or warn "Warning: Could not create bun ownership marker: $!\n";
+        if ($marker) {
+            print $marker "This bun installation was created by claude-confined installer\n";
+            close($marker);
+        }
+    }
+
+    # Create npm and node symlinks for compatibility
+    my $bun_bin_dir = "$ENV{HOME}/.bun/bin";
+    if (-d $bun_bin_dir && -x "$bun_bin_dir/bun") {
+        unless (-e "$bun_bin_dir/npm") {
+            symlink("$bun_bin_dir/bun", "$bun_bin_dir/npm")
+                or warn "Warning: Could not create npm symlink: $!\n";
+            print "Created npm -> bun symlink\n";
+        }
+        unless (-e "$bun_bin_dir/node") {
+            symlink("$bun_bin_dir/bun", "$bun_bin_dir/node")
+                or warn "Warning: Could not create node symlink: $!\n";
+            print "Created node -> bun symlink\n";
+        }
+    }
+
+    # Check and install claude-code if not present
+    unless (command_exists('claude')) {
+        print "Installing Claude Code... ";
+        if (system('bun install -g @anthropic-ai/claude-code >/dev/null 2>&1') != 0) {
+            print RED . "✗" . RESET . "\n\n";
+            print "Error: Failed to install Claude Code\n";
+            exit 1;
+        }
+        print GREEN . "✓" . RESET . "\n";
+    } else {
+        print "Claude Code already installed ✓\n";
+    }
+
+    # Verify claude installation
+    print "Verifying Claude Code installation... ";
+    unless (command_exists('claude')) {
+        print RED . "✗" . RESET . "\n\n";
+        print "Error: Claude Code installation failed\n";
+        exit 1;
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Get Claude Code path
+    my $claude_bin = `which claude 2>/dev/null`;
+    chomp $claude_bin;
+    my $claude_real = $claude_bin ? abs_path($claude_bin) : '';
+    print "Claude Code location: $claude_real\n" if $claude_real;
+
+    # Check if AppArmor is available
+    print "Checking for AppArmor... ";
+    my $apparmor_parser = find_apparmor_parser();
+    unless ($apparmor_parser) {
+        package_not_found('AppArmor',
+                         'sudo apt-get install apparmor apparmor-utils',
+                         'sudo dnf install apparmor apparmor-utils',
+                         'sudo pacman -S apparmor');
+    }
+    print GREEN . "✓" . RESET . "\n";
+
+    # Make scripts executable
+    chmod 0755, 'bin/claude-confined' or die "Error: Cannot chmod bin/claude-confined: $!\n";
+
+    # Compile seccomp filter generator
+    print "Compiling seccomp filter generator... ";
+    my $seccomp_source = 'seccomp/generate-seccomp.c';
+    my $seccomp_output = 'seccomp/generate-seccomp';
+
+    # Check if already compiled and up-to-date
+    my $needs_compile = 1;
+    if (-x $seccomp_output && -e $seccomp_source) {
+        my $output_mtime = (stat($seccomp_output))[9];
+        my $source_mtime = (stat($seccomp_source))[9];
+        $needs_compile = ($output_mtime < $source_mtime);
+    }
+
+    if ($needs_compile) {
+        if (system("gcc -o '$seccomp_output' '$seccomp_source' -lseccomp 2>/dev/null") == 0) {
+            chmod 0755, $seccomp_output;
+            print GREEN . "✓" . RESET . "\n";
+        } else {
+            print RED . "✗" . RESET . "\n";
+            print "Warning: Seccomp compilation failed\n";
+            print "For seccomp support, install: sudo apt-get install gcc libseccomp-dev\n";
+        }
+    } else {
+        print GREEN . "✓" . RESET . " (already compiled)\n";
+    }
+
+    # Install wrapper scripts to user bin
+    print "Installing wrapper script... ";
+    make_path($INSTALL_DIR) unless -d $INSTALL_DIR;
+    copy('bin/claude-confined', "$INSTALL_DIR/claude-confined")
+        or die RED . "✗" . RESET . "\nError: Cannot copy wrapper script: $!\n";
+    chmod 0755, "$INSTALL_DIR/claude-confined"
+        or die RED . "✗" . RESET . "\nError: Cannot make wrapper script executable: $!\n";
+    print GREEN . "✓" . RESET . "\n";
+
+    # Install seccomp generator if it was compiled
+    if (-f 'seccomp/generate-seccomp') {
+        print "Installing seccomp generator... ";
+        make_path($SECCOMP_INSTALL_DIR) unless -d $SECCOMP_INSTALL_DIR;
+        copy('seccomp/generate-seccomp', "$SECCOMP_INSTALL_DIR/generate-seccomp")
+            or die RED . "✗" . RESET . "\nError: Cannot copy seccomp generator: $!\n";
+        chmod 0755, "$SECCOMP_INSTALL_DIR/generate-seccomp";
+        print GREEN . "✓" . RESET . "\n";
+
+        # Clean up source directory binary
+        unlink('seccomp/generate-seccomp') or warn "Warning: Could not remove seccomp/generate-seccomp: $!\n";
+    }
+
+    # Check if user bin is in PATH
+    unless ($ENV{PATH} =~ m|\Q$INSTALL_DIR\E|) {
+        print "\n";
+        print "Warning: $INSTALL_DIR is not in your PATH\n";
+        print "Add this line to your ~/.bashrc or ~/.zshrc:\n";
+        print "  export PATH=\"\${HOME}/.local/bin:\${PATH}\"\n";
+    }
+
+    # Create Claude directories
+    print "Creating Claude directories... ";
+    make_path($CLAUDE_DIR) unless -d $CLAUDE_DIR;
+    make_path("$CLAUDE_DIR/tmp") unless -d "$CLAUDE_DIR/tmp";
+    make_path("$CLAUDE_DIR/ssh") unless -d "$CLAUDE_DIR/ssh";
+
+    # Create marker file to verify SSH bind mount
+    open(my $marker, '>', "$CLAUDE_DIR/ssh/.claude-confined-bind")
+        or warn "Warning: Could not create SSH bind marker: $!\n";
+    if ($marker) {
+        print $marker "This file verifies the SSH directory is bind-mounted from ~/.claude/ssh\n";
+        close($marker);
+    }
+
+    print GREEN . "✓" . RESET . "\n";
+
+    # Install AppArmor profiles
+    print "Installing AppArmor profile... ";
+
+    # Detect the Claude Code CLI path
+    my $bun_global_dir = "$ENV{HOME}/.bun/install/global/node_modules/\@anthropic-ai/claude-code";
+    my $claude_cli = "$bun_global_dir/cli.js";
+
+    # Read and process AppArmor profile template
+    open(my $fh, '<', 'apparmor/claude-confined')
+        or die "Error: Cannot read apparmor/claude-confined: $!\n";
+    my $profile_content = do { local $/; <$fh> };
+    close($fh);
+
+    # Substitute paths
+    $profile_content =~ s/\@CLAUDE_CLI\@/$claude_cli/g;
+    $profile_content =~ s/\@HOME\@/$ENV{HOME}/g;
+
+    # Add allowed directories to the profile
+    if (@$allowed_dirs_ref) {
+        my $allowed_section = "\n    # User-specified allowed directories\n";
+        foreach my $dir (@$allowed_dirs_ref) {
+            $allowed_section .= "    owner $dir/ r,\n";
+            $allowed_section .= "    owner $dir/** rwlkmix -> &claude-confined-unpriv,\n";
+        }
+
+        # Insert before the "include if exists" line in claude-confined-unpriv profile
+        $profile_content =~ s/(    include if exists <local\/claude-confined-unpriv>)/$allowed_section\n$1/;
+    }
+
+    # Write temporary profile
+    my $temp_profile = "/tmp/claude-confined-$$.tmp";
+    open(my $ofh, '>', $temp_profile)
+        or die "Error: Cannot write to $temp_profile: $!\n";
+    print $ofh $profile_content;
+    close($ofh);
+
+    # Install AppArmor profile using sudo
+    if (system("sudo cp '$temp_profile' '$APPARMOR_DIR/claude-confined'") != 0) {
+        unlink($temp_profile);
+        print RED . "✗" . RESET . "\n\n";
+        print "Error: Failed to install AppArmor profile\n";
+        exit 1;
+    }
+    unlink($temp_profile);
+
+    if (system("sudo '$apparmor_parser' -r '$APPARMOR_DIR/claude-confined'") != 0) {
+        print RED . "✗" . RESET . "\n\n";
+        print "Error: Failed to load AppArmor profile\n";
+        exit 1;
+    }
+
+    print GREEN . "✓" . RESET . "\n";
+
+    # Print summary
+    print "\n";
+    print "Installation complete!\n";
+    if (@$allowed_dirs_ref) {
+        print "\n";
+        print "Additional allowed directories:\n";
+        foreach my $dir (@$allowed_dirs_ref) {
+            print "  - $dir\n";
+        }
+    }
+
+    print "\n";
+}
+
+# ============================================================================
+# Uninstallation
+# ============================================================================
+
+sub do_uninstall {
+    print "Uninstalling claude-confined...\n\n";
+
+    my $failed = 0;
+
+    # Remove wrapper scripts
+    if (-f "$INSTALL_DIR/claude-confined") {
+        print "Removing wrapper script... ";
+        if (unlink("$INSTALL_DIR/claude-confined")) {
+            print GREEN . "✓" . RESET . "\n";
+        } else {
+            print RED . "✗" . RESET . "\n";
+            warn "Warning: Cannot remove $INSTALL_DIR/claude-confined: $!\n";
+            $failed = 1;
+        }
+    }
+
+    # Remove seccomp generator
+    if (-d $SECCOMP_INSTALL_DIR) {
+        print "Removing seccomp generator... ";
+        if (remove_tree($SECCOMP_INSTALL_DIR)) {
+            print GREEN . "✓" . RESET . "\n";
+        } else {
+            print RED . "✗" . RESET . "\n";
+            warn "Warning: Cannot remove $SECCOMP_INSTALL_DIR: $!\n";
+            $failed = 1;
+        }
+    }
+
+    # Remove seccomp filter generator from source
+    if (-f 'seccomp/generate-seccomp') {
+        print "Removing compiled seccomp filter... ";
+        if (unlink('seccomp/generate-seccomp')) {
+            print GREEN . "✓" . RESET . "\n";
+        } else {
+            print RED . "✗" . RESET . "\n";
+            warn "Warning: Cannot remove seccomp/generate-seccomp: $!\n";
+            $failed = 1;
+        }
+    }
+
+    # Remove bun if we installed it
+    my $bun_dir = "$ENV{HOME}/.bun";
+    if (-f "$bun_dir/.installed-by-claude-confined") {
+        print "Removing bun (installed by claude-confined)... ";
+        if (-d $bun_dir) {
+            if (remove_tree($bun_dir)) {
+                print GREEN . "✓" . RESET . "\n";
+            } else {
+                print RED . "✗" . RESET . "\n";
+                warn "Warning: Cannot remove $bun_dir: $!\n";
+                $failed = 1;
+            }
+        }
+    } elsif (-d $bun_dir) {
+        print "Note: Bun was not installed by claude-confined, leaving it in place\n";
+    }
+
+    # Remove AppArmor profile (requires sudo)
+    if (-f "$APPARMOR_DIR/claude-confined") {
+        print "Unloading AppArmor profile... ";
+        my $apparmor_parser = find_apparmor_parser();
+        if ($apparmor_parser) {
+            # Unload all three profiles (continue even if not loaded)
+            system("sudo '$apparmor_parser' -R '$APPARMOR_DIR/claude-confined' 2>/dev/null");
+            print GREEN . "✓" . RESET . "\n";
+
+            print "Removing AppArmor profile... ";
+            if (system("sudo rm -f '$APPARMOR_DIR/claude-confined' 2>/dev/null") == 0) {
+                print GREEN . "✓" . RESET . "\n";
+            } else {
+                print RED . "✗" . RESET . "\n";
+                warn "Warning: Failed to remove AppArmor profile file\n";
+                $failed = 1;
+            }
+        } else {
+            print RED . "✗" . RESET . "\n";
+            warn "Warning: apparmor_parser not found\n";
+            print "Manually remove: sudo rm -f $APPARMOR_DIR/claude-confined\n";
+            $failed = 1;
+        }
+    }
+
+    print "\n";
+    if ($failed) {
+        print "Uninstallation completed with errors\n";
+        print "Some components could not be removed (see warnings above)\n";
+        exit 1;
+    } else {
+        print "Uninstallation complete!\n";
+    }
+    print "\n";
+    print "Note: Claude directory ~/.claude was NOT removed\n";
+    print "Remove it manually if desired: rm -rf ~/.claude\n";
+}
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
+sub early_exit {
+    my ($message) = @_;
+    print "\n$message\n";
+    exit 1;
+}
+
+sub package_not_found {
+    my ($package_name, $debian, $fedora, $arch) = @_;
+    print RED . "✗" . RESET . "\n";
+    my $message = "Error: $package_name is not installed\nInstall it with:\n";
+    $message .= "  Debian/Ubuntu: $debian\n";
+    $message .= "  Fedora/RHEL:   $fedora\n";
+    $message .= "  Arch:          $arch";
+    early_exit($message);
+}
+
+sub command_exists {
+    my ($cmd) = @_;
+    return system("command -v $cmd >/dev/null 2>&1") == 0;
+}
+
+sub find_apparmor_parser {
+    return '/usr/sbin/apparmor_parser' if -x '/usr/sbin/apparmor_parser';
+    return '/sbin/apparmor_parser' if -x '/sbin/apparmor_parser';
+    return 'apparmor_parser' if command_exists('apparmor_parser');
+    return undef;
+}
+
+sub print_help {
+    print <<'HELP';
+Usage: install [OPTIONS]
+
+Installation script for claude-confined sandboxing wrapper.
+
+Options:
+  --help, -h         Show this help message
+  --uninstall        Uninstall claude-confined
+  --allow PATH       Add directory to allow access (can be specified multiple times)
+
+Examples:
+  install
+  install --allow /home/user/projects --allow /workspace
+  install --uninstall
+
+Description:
+  This script installs claude-confined, which runs Claude Code in a sandboxed
+  environment using bubblewrap, seccomp, and AppArmor for security.
+
+  The --allow option adds additional directories to the AppArmor profile,
+  granting the sandboxed Claude Code read-write access to those paths.
+
+Requirements:
+  - bubblewrap (bwrap)
+  - AppArmor
+  - bun (will be installed if missing)
+  - Claude Code (will be installed if missing)
+  - gcc and libseccomp-dev (optional, for seccomp filtering)
+HELP
+}
