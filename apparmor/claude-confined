@@ -261,8 +261,8 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # System directories (read-only, mmap, execute with profile transition)
     /usr/** mrpix -> &claude-confined-unpriv,
-    /lib/** mr,
-    /lib64/** mr,
+    /lib/** mrix,
+    /lib64/** mrix,
     /bin/** mrpix -> &claude-confined-unpriv,
     /sbin/** mrpix -> &claude-confined-unpriv,
     /etc/** r,
