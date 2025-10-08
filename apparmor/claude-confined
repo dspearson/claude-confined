@@ -1,6 +1,6 @@
 #include <tunables/global>
 
-profile claude-confined @HOME@/.local/bin/claude-confined flags=(enforce) {
+profile claude-confined @{HOME}/.local/bin/claude-confined flags=(enforce) {
   #include <abstractions/base>
   #include <abstractions/nameservice>
   #include <abstractions/openssl>
@@ -28,7 +28,7 @@ profile claude-confined @HOME@/.local/bin/claude-confined flags=(enforce) {
   /usr/bin/dash rix,
   /bin/dash rix,
 
-  # Bubblewrap execution (transition to top-level bwrap profile)
+  # Bubblewrap execution (transition to named bwrap profile, not globally attached)
   /usr/bin/bwrap Px -> claude-confined-bwrap,
   /bin/bwrap Px -> claude-confined-bwrap,
 
@@ -164,8 +164,8 @@ profile claude-confined @HOME@/.local/bin/claude-confined flags=(enforce) {
   signal (send) peer=claude-confined,
 }
 
-# Top-level profile for bwrap - allows capabilities for namespace setup
-profile claude-confined-bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+# Named profile for bwrap - only activated via transition, not globally attached
+profile claude-confined-bwrap flags=(attach_disconnected,mediate_deleted) {
     # Allow all capabilities needed for namespace setup
     capability,
 
@@ -195,7 +195,7 @@ profile claude-confined-bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_
     include if exists <local/claude-confined-bwrap>
 }
 
-# Top-level profile for processes inside the namespace - no capabilities
+# Named profile for processes inside the namespace - no capabilities, only via stacking
 profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
     # Deny dangerous system commands
     audit deny /bin/su rwx,
