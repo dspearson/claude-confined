@@ -1,0 +1,11 @@
+# Optional AppArmor profile extension for full ~/.config access
+# Enable with: just enable-profile full-config-access
+# Disable with: just disable-profile full-config-access
+#
+# WARNING: This allows Claude to read and modify ALL configuration files.
+# This is dangerous and should only be used temporarily for specific tasks.
+
+# Full access to all configuration directories
+# Note: Some specific paths like .config/emacs/bin/ may have different rules in main profile
+owner @HOME@/.config/ rw,
+owner @HOME@/.config/** rwlkm,

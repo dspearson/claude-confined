@@ -1,0 +1,25 @@
+# Optional AppArmor profile extension for Emacs/Doom configuration editing
+# Enable with: just enable-profile emacs-config
+# Disable with: just disable-profile emacs-config
+#
+# WARNING: This allows Claude to modify your Emacs and Doom configuration.
+# Only enable when you explicitly want Claude to edit these configs.
+
+# Emacs configuration directory
+# Note: .config/emacs/bin/** is already allowed in main profile for executables
+owner @HOME@/.config/emacs/ rw,
+owner @HOME@/.config/emacs/* rwlkm,
+owner @HOME@/.config/emacs/*/ rw,
+owner @HOME@/.config/emacs/**/* rwlkm,
+
+# Doom Emacs configuration directory
+owner @HOME@/.config/doom/ rw,
+owner @HOME@/.config/doom/** rwlkm,
+
+# Emacs.d (traditional location)
+owner @HOME@/.emacs.d/ rw,
+owner @HOME@/.emacs.d/** rwlkm,
+
+# Doom Emacs private config
+owner @HOME@/.doom.d/ rw,
+owner @HOME@/.doom.d/** rwlkm,

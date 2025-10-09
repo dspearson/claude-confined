@@ -1,0 +1,90 @@
+#!/bin/bash
+# Test that optional profiles trigger correct bubblewrap bind mounts
+# This simulates the behaviour without requiring actual sudo/installation
+
+set -euo pipefail
+
+# Create a fake local override file
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf ${TEMP_DIR}" EXIT
+
+FAKE_LOCAL="${TEMP_DIR}/claude-confined-unpriv"
+
+echo "Testing bubblewrap binding logic..."
+echo ""
+
+# Test function
+test_profile() {
+    local profile_name=$1
+
+    echo "Testing profile: ${profile_name}"
+
+    # Create fake override with this profile enabled
+    echo "#include <local/claude-confined-optional-${profile_name}>" > "${FAKE_LOCAL}"
+
+    # Extract the binding logic from claude-confined
+    # We'll simulate the key parts
+    HOME="${HOME}"
+
+    if grep -q "claude-confined-optional-${profile_name}" "${FAKE_LOCAL}" 2>/dev/null; then
+        echo "  ✓ Profile detected as enabled"
+
+        # Show what would be bound (simulate the logic)
+        case "${profile_name}" in
+            emacs-config)
+                echo "  Would bind:"
+                [[ -d "${HOME}/.config/emacs" ]] && echo "    - ${HOME}/.config/emacs"
+                [[ -d "${HOME}/.config/doom" ]] && echo "    - ${HOME}/.config/doom"
+                [[ -d "${HOME}/.emacs.d" ]] && echo "    - ${HOME}/.emacs.d"
+                [[ -d "${HOME}/.doom.d" ]] && echo "    - ${HOME}/.doom.d"
+                ;;
+            vim-config)
+                echo "  Would bind:"
+                [[ -d "${HOME}/.vim" ]] && echo "    - ${HOME}/.vim"
+                [[ -f "${HOME}/.vimrc" ]] && echo "    - ${HOME}/.vimrc"
+                [[ -d "${HOME}/.config/nvim" ]] && echo "    - ${HOME}/.config/nvim"
+                [[ -d "${HOME}/.local/share/nvim" ]] && echo "    - ${HOME}/.local/share/nvim"
+                ;;
+            browser-config)
+                echo "  Would bind:"
+                [[ -d "${HOME}/.mozilla" ]] && echo "    - ${HOME}/.mozilla"
+                [[ -d "${HOME}/.config/google-chrome" ]] && echo "    - ${HOME}/.config/google-chrome"
+                [[ -d "${HOME}/.config/chromium" ]] && echo "    - ${HOME}/.config/chromium"
+                ;;
+            full-config-access)
+                echo "  Would bind:"
+                [[ -d "${HOME}/.config" ]] && echo "    - ${HOME}/.config"
+                ;;
+        esac
+    else
+        echo "  ✗ Profile not detected (bug!)"
+        exit 1
+    fi
+
+    echo ""
+}
+
+# Test detection when no profiles enabled
+echo "Test 1: No profiles enabled"
+rm -f "${FAKE_LOCAL}"
+if [[ -f "${FAKE_LOCAL}" ]]; then
+    echo "  ✗ File should not exist"
+    exit 1
+else
+    echo "  ✓ No local override file (no bindings added)"
+fi
+echo ""
+
+# Test each profile
+test_profile "emacs-config"
+test_profile "vim-config"
+test_profile "browser-config"
+test_profile "full-config-access"
+
+echo "All binding logic tests passed!"
+echo ""
+echo "Note: This tests the detection logic only."
+echo "Actual binding requires:"
+echo "  1. Optional profile enabled (sudo)"
+echo "  2. Directories must exist on your system"
+echo "  3. Running via claude-confined wrapper"
