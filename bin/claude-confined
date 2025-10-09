@@ -50,7 +50,15 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift
-            ADDITIONAL_RW_PATHS+=("$(realpath "$1")")
+            # Store as "real_path:bind_target" - if symlink, preserve the symlink path
+            if [[ -L "$1" ]]; then
+                real_path="$(realpath "$1")"
+                symlink_path="$1"
+                ADDITIONAL_RW_PATHS+=("${real_path}:${symlink_path}")
+            else
+                real_path="$(realpath "$1")"
+                ADDITIONAL_RW_PATHS+=("${real_path}:${real_path}")
+            fi
             shift
             ;;
         --ro-allow)
@@ -59,7 +67,15 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift
-            ADDITIONAL_RO_PATHS+=("$(realpath "$1")")
+            # Store as "real_path:bind_target" - if symlink, preserve the symlink path
+            if [[ -L "$1" ]]; then
+                real_path="$(realpath "$1")"
+                symlink_path="$1"
+                ADDITIONAL_RO_PATHS+=("${real_path}:${symlink_path}")
+            else
+                real_path="$(realpath "$1")"
+                ADDITIONAL_RO_PATHS+=("${real_path}:${real_path}")
+            fi
             shift
             ;;
         --bash)
@@ -253,26 +269,30 @@ if [[ ! -v BOUND_PATHS["${INITIAL_CWD}"] ]]; then
 fi
 
 # Add additional read-write paths
-for path in "${ADDITIONAL_RW_PATHS[@]}"; do
-    if [[ ! -e "${path}" ]]; then
-        echo "Warning: Path does not exist: ${path}" >&2
+for path_pair in "${ADDITIONAL_RW_PATHS[@]}"; do
+    # Split "source:target" pair
+    IFS=':' read -r source_path target_path <<< "${path_pair}"
+    if [[ ! -e "${source_path}" ]]; then
+        echo "Warning: Path does not exist: ${source_path}" >&2
         continue
     fi
-    if [[ ! -v BOUND_PATHS["${path}"] ]]; then
-        BWRAP_ARGS+=(--bind "${path}" "${path}")
-        BOUND_PATHS["${path}"]=1
+    if [[ ! -v BOUND_PATHS["${target_path}"] ]]; then
+        BWRAP_ARGS+=(--bind "${source_path}" "${target_path}")
+        BOUND_PATHS["${target_path}"]=1
     fi
 done
 
 # Add additional read-only paths
-for path in "${ADDITIONAL_RO_PATHS[@]}"; do
-    if [[ ! -e "${path}" ]]; then
-        echo "Warning: Path does not exist: ${path}" >&2
+for path_pair in "${ADDITIONAL_RO_PATHS[@]}"; do
+    # Split "source:target" pair
+    IFS=':' read -r source_path target_path <<< "${path_pair}"
+    if [[ ! -e "${source_path}" ]]; then
+        echo "Warning: Path does not exist: ${source_path}" >&2
         continue
     fi
-    if [[ ! -v BOUND_PATHS["${path}"] ]]; then
-        BWRAP_ARGS+=(--ro-bind "${path}" "${path}")
-        BOUND_PATHS["${path}"]=1
+    if [[ ! -v BOUND_PATHS["${target_path}"] ]]; then
+        BWRAP_ARGS+=(--ro-bind "${source_path}" "${target_path}")
+        BOUND_PATHS["${target_path}"]=1
     fi
 done
 
