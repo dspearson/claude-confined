@@ -130,6 +130,31 @@ claude-confined --bash "cat /proc/self/status"
 DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
 ```
 
+## Emacs Integration
+
+Use `claude-confined` directly in Emacs with [`claude-code.el`](https://github.com/stevemolitor/claude-code.el):
+
+**For Doom Emacs:**
+```bash
+# Add doom-packages.el to ~/.config/doom/packages.el
+# Add doom-config.el to ~/.config/doom/config.el
+doom sync
+```
+
+**For Vanilla Emacs:**
+```elisp
+;; Add to your Emacs init file
+(load-file "/path/to/claude-confined/claude-code-emacs.el")
+```
+
+Features:
+- **vterm backend** for fast terminal emulation
+- **monet integration** for LSP functionality
+- **Sandboxed execution** with all claude-confined security features
+- Helper functions to grant additional directory access
+
+See [emacs/EMACS.md](emacs/EMACS.md) for complete installation and usage instructions.
+
 ## Security Model
 
 ### Filesystem Access
@@ -203,7 +228,7 @@ sudo journalctl -xe | grep -i apparmor | grep claude-confined
 sudo dmesg | tail -100 | grep -i apparmor
 ```
 
-## Customization
+## Customisation
 
 ### Modifying AppArmor Profile
 
