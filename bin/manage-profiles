@@ -67,7 +67,7 @@ sub list_profiles {
             print "    $note\n" if $note;
             print "\n";
         }
-        print "\nUse 'manage-profiles enable PROFILE' to enable a profile.\n";
+        print "Use 'manage-profiles enable PROFILE' to enable a profile.\n";
     } else {
         print "No optional profiles found.\n";
     }

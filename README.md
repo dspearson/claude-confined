@@ -232,6 +232,40 @@ bin/install --allow /home/user/projects --allow /workspace
 
 This modifies the installed AppArmor profile to grant access to these directories.
 
+### Optional Profiles for Configuration Directories
+
+By default, Claude is restricted from accessing configuration directories like `~/.config/emacs` or `~/.config/doom` to prevent sandbox escapes when integrated with editors. However, you can temporarily enable optional profiles when you specifically want Claude to help with configurations:
+
+```bash
+# List available optional profiles
+just list-profiles
+
+# Check which profiles are enabled
+just profile-status
+
+# Enable a profile (e.g., to let Claude edit your Emacs config)
+just enable-profile emacs-config
+
+# Work with Claude on your configuration
+claude-confined
+
+# Disable when done
+just disable-profile emacs-config
+```
+
+**Available optional profiles:**
+- **`emacs-config`** - Grants access to Emacs and Doom configuration directories
+- **`browser-config`** - Grants access to Firefox/Chrome configuration
+- **`full-config-access`** - Grants access to all `~/.config` (use sparingly)
+
+**Best practices:**
+- Only enable profiles when you need them
+- Disable profiles immediately after completing your task
+- Use specific profiles (`emacs-config`) rather than broad ones (`full-config-access`)
+- Check `just profile-status` regularly to see what's enabled
+
+See [apparmor/optional/README.md](apparmor/optional/README.md) for details on creating custom optional profiles.
+
 ## Uninstallation
 
 ```bash
@@ -295,6 +329,26 @@ sudo dmesg | grep -i apparmor
 5. **Claude Code** runs inside the sandbox with restricted access
 
 The current directory is bind-mounted into the sandbox, allowing Claude to work on your project files while blocking access to sensitive home directory files.
+
+## Development
+
+### Using direnv
+
+This project includes a `.envrc` file for [direnv](https://direnv.net/) that automatically displays available commands when you enter the directory:
+
+```bash
+# Install direnv (if not already installed)
+sudo apt-get install direnv
+
+# Add to your shell (~/.bashrc or ~/.zshrc):
+eval "$(direnv hook bash)"  # for bash
+eval "$(direnv hook zsh)"   # for zsh
+
+# Allow the .envrc in this directory:
+direnv allow
+```
+
+Now whenever you `cd` into the claude-confined directory, you'll see the available `just` commands automatically.
 
 ## Licence
 
