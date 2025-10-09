@@ -308,7 +308,7 @@ ASCII_ART
         my $allowed_section = "\n    # User-specified allowed directories\n";
         foreach my $dir (@$allowed_dirs_ref) {
             $allowed_section .= "    owner $dir/ r,\n";
-            $allowed_section .= "    owner $dir/** rwlkmix -> &claude-confined-unpriv,\n";
+            $allowed_section .= "    owner $dir/** rwlkmpix -> &claude-confined-unpriv,\n";
         }
 
         # Insert before the "include if exists" line in claude-confined-unpriv profile
@@ -340,7 +340,6 @@ ASCII_ART
     print GREEN . "✓" . RESET . "\n";
 
     # Print summary
-    print "\n";
     print "Installation complete!\n";
     if (@$allowed_dirs_ref) {
         print "\n";
