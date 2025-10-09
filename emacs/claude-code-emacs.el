@@ -41,7 +41,7 @@
 
 ;; Install monet for LSP integration (optional but recommended)
 (use-package monet
-  :ensure t
+  :vc (:url "https://github.com/stevemolitor/monet" :rev :newest)
   :config
   (monet-mode 1))
 
