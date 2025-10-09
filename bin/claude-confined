@@ -212,6 +212,34 @@ if [[ -d "${CLAUDE_DIR}/ssh" ]]; then
     BWRAP_ARGS+=(--bind "${CLAUDE_DIR}/ssh" "${HOME}/.ssh")
 fi
 
+# Check for enabled optional AppArmor profiles and bind corresponding directories
+# Define profile->directories mapping (data-driven approach)
+declare -A PROFILE_DIRS=(
+    ["emacs-config"]="${HOME}/.config/emacs ${HOME}/.config/doom ${HOME}/.emacs.d ${HOME}/.doom.d"
+    ["vim-config"]="${HOME}/.vim ${HOME}/.vimrc ${HOME}/.config/nvim ${HOME}/.local/share/nvim"
+    ["browser-config"]="${HOME}/.mozilla ${HOME}/.config/google-chrome ${HOME}/.config/chromium"
+    ["full-config-access"]="${HOME}/.config"
+)
+
+APPARMOR_LOCAL_UNPRIV="/etc/apparmor.d/local/claude-confined-unpriv"
+if [[ -f "${APPARMOR_LOCAL_UNPRIV}" ]]; then
+    # Read file once and check for enabled profiles
+    local_unpriv_content=$(cat "${APPARMOR_LOCAL_UNPRIV}" 2>/dev/null || true)
+
+    for profile in "${!PROFILE_DIRS[@]}"; do
+        if echo "${local_unpriv_content}" | grep -q "claude-confined-optional-${profile}"; then
+            # Bind all directories for this profile
+            for dir in ${PROFILE_DIRS[$profile]}; do
+                if [[ -d "${dir}" ]]; then
+                    BWRAP_ARGS+=(--bind "${dir}" "${dir}")
+                elif [[ -f "${dir}" ]]; then
+                    BWRAP_ARGS+=(--bind "${dir}" "${dir}")
+                fi
+            done
+        fi
+    done
+fi
+
 # Track paths already bound to avoid duplicates
 declare -A BOUND_PATHS
 BOUND_PATHS["${CLAUDE_DIR}"]=1

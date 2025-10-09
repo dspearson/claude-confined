@@ -308,12 +308,12 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # Rustup toolchain manager
     owner @{HOME}/.rustup/ r,
-    owner @{HOME}/.rustup/** rwlkmix -> &claude-confined-unpriv,
+    owner @{HOME}/.rustup/** rwlkmpix -> &claude-confined-unpriv,
 
     # Bun runtime (with directory access, write for caches/locks, execute for vendored binaries)
-    # REQUIRED FOR COLORS: Execute permission (ix) needed for vendored binaries like ripgrep
+    # REQUIRED FOR COLORS: Execute permission (pix) needed for vendored binaries like ripgrep
     owner @{HOME}/.bun/ r,
-    owner @{HOME}/.bun/** rwlkmix -> &claude-confined-unpriv,
+    owner @{HOME}/.bun/** rwlkmpix -> &claude-confined-unpriv,
 
     # Git configuration (read-only)
     owner @{HOME}/.gitconfig r,

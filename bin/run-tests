@@ -85,12 +85,9 @@ if (-f "/proc/self/status") {
     }
 }
 
-if (-x "/usr/sbin/reboot" || -x "/sbin/reboot") {
-    my $reboot_cmd = -x "/usr/sbin/reboot" ? "/usr/sbin/reboot" : "/sbin/reboot";
-    test_should_fail("Seccomp", "Block reboot", "timeout 1 $reboot_cmd 2>&1 | grep -q 'Operation not permitted'");
-}
-
-test_should_fail("Seccomp", "Block insmod", "[ -d /lib/modules ] && timeout 1 insmod /dev/null 2>/dev/null");
+# Test that dangerous kernel interfaces are blocked (safe - just write attempts)
+test_should_fail("Isolation", "Block /proc/sys writes", "echo 1 > /proc/sys/kernel/hostname 2>/dev/null");
+test_should_fail("Isolation", "Block /sys writes", "[ -d /sys/class ] && echo 1 > /sys/class/test 2>/dev/null");
 
 # Network Tests
 if (system("ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1") == 0) {
