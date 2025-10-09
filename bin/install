@@ -143,7 +143,7 @@ ASCII_ART
                              'sudo pacman -S curl');
         }
     } else {
-        print "Bun already installed ✓\n";
+        print "Bun already installed " . GREEN . "✓" . RESET . "\n";
     }
 
     # Mark that we installed bun (for uninstall)
@@ -182,7 +182,7 @@ ASCII_ART
         }
         print GREEN . "✓" . RESET . "\n";
     } else {
-        print "Claude Code already installed ✓\n";
+        print "Claude Code already installed " . GREEN . "✓" . RESET . "\n";
     }
 
     # Verify claude installation
