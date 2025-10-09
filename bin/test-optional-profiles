@@ -1,0 +1,103 @@
+#!/usr/bin/env perl
+# Test optional AppArmor profiles for syntax errors
+# This validates profiles can be loaded without conflicts
+
+use strict;
+use warnings;
+use File::Basename;
+use File::Spec;
+use Cwd qw(abs_path);
+use File::Temp qw(tempdir);
+
+# Find directories
+my $SCRIPT_DIR = dirname(abs_path($0));
+my $REPO_DIR = dirname($SCRIPT_DIR);
+my $OPTIONAL_DIR = "$REPO_DIR/apparmor/optional";
+my $MAIN_PROFILE = "$REPO_DIR/apparmor/claude-confined";
+
+# Check for apparmor_parser
+my $apparmor_parser = find_apparmor_parser();
+unless ($apparmor_parser) {
+    die "Error: apparmor_parser not found. Cannot test profiles.\n";
+}
+
+print "Testing optional AppArmor profiles...\n\n";
+
+# Read main profile
+open(my $fh, '<', $MAIN_PROFILE) or die "Cannot read $MAIN_PROFILE: $!\n";
+my $main_content = do { local $/; <$fh> };
+close($fh);
+
+# Test each optional profile
+opendir(my $dh, $OPTIONAL_DIR) or die "Cannot open $OPTIONAL_DIR: $!\n";
+my @profiles = grep { -f "$OPTIONAL_DIR/$_" && $_ !~ /^\./ && $_ ne 'README.md' } readdir($dh);
+closedir($dh);
+
+my $failed = 0;
+my $passed = 0;
+
+foreach my $profile (sort @profiles) {
+    print "Testing $profile... ";
+
+    # Read optional profile
+    my $optional_file = "$OPTIONAL_DIR/$profile";
+    open(my $ofh, '<', $optional_file) or die "Cannot read $optional_file: $!\n";
+    my $optional_content = do { local $/; <$ofh> };
+    close($ofh);
+
+    # Substitute @HOME@
+    my $home = $ENV{HOME};
+    $optional_content =~ s/\@HOME\@/$home/g;
+
+    # Create a merged profile for testing
+    my $merged = $main_content;
+
+    # Insert optional rules before the final "include if exists" line in unpriv profile
+    $merged =~ s/(    include if exists <local\/claude-confined-unpriv>)/$optional_content\n\n$1/;
+
+    # Substitute @HOME@ in main profile too
+    $merged =~ s/\@HOME\@/$home/g;
+
+    # Substitute @CLAUDE_CLI@ placeholder (use dummy path for testing)
+    $merged =~ s/\@CLAUDE_CLI\@/\/home\/user\/.bun\/install\/global\/node_modules\/\@anthropic-ai\/claude-code\/cli.js/g;
+
+    # Create temp file
+    my $temp_dir = tempdir(CLEANUP => 1);
+    my $temp_profile = "$temp_dir/test-profile";
+    open(my $tfh, '>', $temp_profile) or die "Cannot write to $temp_profile: $!\n";
+    print $tfh $merged;
+    close($tfh);
+
+    # Test with apparmor_parser in dry-run mode
+    my $result = system("$apparmor_parser -p '$temp_profile' 2>&1 | grep -q 'ERROR'");
+
+    if ($result == 0) {
+        # grep found ERROR
+        print "FAILED\n";
+        print "  Running parser to show errors:\n";
+        system("$apparmor_parser -p '$temp_profile' 2>&1 | head -20");
+        print "\n";
+        $failed++;
+    } else {
+        print "PASSED\n";
+        $passed++;
+    }
+}
+
+print "\n";
+print "Results: $passed passed, $failed failed\n";
+
+if ($failed > 0) {
+    print "\nSome profiles have syntax errors. Please fix them before using.\n";
+    exit 1;
+} else {
+    print "\nAll profiles passed syntax validation!\n";
+    exit 0;
+}
+
+sub find_apparmor_parser {
+    return '/usr/sbin/apparmor_parser' if -x '/usr/sbin/apparmor_parser';
+    return '/sbin/apparmor_parser' if -x '/sbin/apparmor_parser';
+    return 'apparmor_parser' if system('command -v apparmor_parser >/dev/null 2>&1') == 0;
+    return undef;
+}

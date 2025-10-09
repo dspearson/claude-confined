@@ -1,0 +1,19 @@
+# Optional AppArmor profile extension for Vim/Neovim configuration editing
+# Enable with: just enable-profile vim-config
+# Disable with: just disable-profile vim-config
+#
+# WARNING: This allows Claude to modify your Vim and Neovim configuration.
+# Only enable when you explicitly want Claude to edit these configs.
+
+# Vim configuration
+owner @HOME@/.vim/ rw,
+owner @HOME@/.vim/** rwlkm,
+owner @HOME@/.vimrc rwlkm,
+
+# Neovim configuration
+owner @HOME@/.config/nvim/ rw,
+owner @HOME@/.config/nvim/** rwlkm,
+
+# Neovim data directory (plugins, etc.)
+owner @HOME@/.local/share/nvim/ rw,
+owner @HOME@/.local/share/nvim/** rwlkm,

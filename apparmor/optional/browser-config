@@ -1,0 +1,16 @@
+# Optional AppArmor profile extension for browser configuration editing
+# Enable with: just enable-profile browser-config
+# Disable with: just disable-profile browser-config
+#
+# WARNING: This allows Claude to read and modify browser configurations.
+# Only enable when you explicitly want Claude to edit browser configs.
+
+# Firefox
+owner @HOME@/.mozilla/ rw,
+owner @HOME@/.mozilla/** rwlkm,
+
+# Chrome/Chromium
+owner @HOME@/.config/google-chrome/ rw,
+owner @HOME@/.config/google-chrome/** rwlkm,
+owner @HOME@/.config/chromium/ rw,
+owner @HOME@/.config/chromium/** rwlkm,

@@ -1,0 +1,288 @@
+#!/usr/bin/env perl
+# Manage optional AppArmor profiles for claude-confined
+# Usage: manage-profiles {enable|disable|list|status} [profile-name]
+
+use strict;
+use warnings;
+use File::Basename;
+use File::Spec;
+use Cwd qw(abs_path);
+
+# Find script directory to locate apparmor/optional
+my $SCRIPT_DIR = dirname(abs_path($0));
+my $REPO_DIR = dirname($SCRIPT_DIR);
+my $OPTIONAL_DIR = "$REPO_DIR/apparmor/optional";
+my $APPARMOR_LOCAL_DIR = "/etc/apparmor.d/local";
+
+sub usage {
+    print <<'USAGE';
+Usage: manage-profiles {enable|disable|list|status} [profile-name]
+
+Commands:
+  enable PROFILE   Enable an optional AppArmor profile
+  disable PROFILE  Disable an optional AppArmor profile
+  list             List available optional profiles
+  status           Show status of all optional profiles
+
+Examples:
+  manage-profiles list
+  manage-profiles enable emacs-config
+  manage-profiles disable emacs-config
+  manage-profiles status
+
+USAGE
+    exit 1;
+}
+
+sub list_profiles {
+    unless (-d $OPTIONAL_DIR) {
+        print "No optional profiles directory found: $OPTIONAL_DIR\n";
+        return;
+    }
+
+    opendir(my $dh, $OPTIONAL_DIR) or die "Cannot open $OPTIONAL_DIR: $!\n";
+    my @profiles = grep { -f "$OPTIONAL_DIR/$_" && $_ !~ /^\./ && $_ ne 'README.md' } readdir($dh);
+    closedir($dh);
+
+    if (@profiles) {
+        print "Available optional profiles:\n\n";
+        foreach my $profile (sort @profiles) {
+            my $path = "$OPTIONAL_DIR/$profile";
+
+            # Read first comment block for description
+            open(my $fh, '<', $path) or next;
+            my $desc = "";
+            my $note = "";
+            while (my $line = <$fh>) {
+                last unless $line =~ /^#/;
+                if ($line =~ /^#\s*WARNING:\s*(.*)/) {
+                    $note = $1;
+                    last;
+                }
+            }
+            close($fh);
+
+            my $status_indicator = get_profile_status($profile) ? " (active)" : "";
+            print "  • $profile$status_indicator\n";
+            print "    $note\n" if $note;
+            print "\n";
+        }
+        print "\nUse 'manage-profiles enable PROFILE' to enable a profile.\n";
+    } else {
+        print "No optional profiles found.\n";
+    }
+}
+
+sub get_profile_status {
+    my ($profile) = @_;
+
+    # Check if enabled in /etc/apparmor.d/local/claude-confined-unpriv
+    my $local_file = "$APPARMOR_LOCAL_DIR/claude-confined-unpriv";
+    return 0 unless -f $local_file;
+
+    open(my $fh, '<', $local_file) or return 0;
+    while (my $line = <$fh>) {
+        if ($line =~ /claude-confined-optional-\Q$profile\E/) {
+            close($fh);
+            return 1;
+        }
+    }
+    close($fh);
+    return 0;
+}
+
+sub show_status {
+    unless (-d $OPTIONAL_DIR) {
+        print "No optional profiles directory found: $OPTIONAL_DIR\n";
+        return;
+    }
+
+    opendir(my $dh, $OPTIONAL_DIR) or die "Cannot open $OPTIONAL_DIR: $!\n";
+    my @profiles = grep { -f "$OPTIONAL_DIR/$_" && $_ !~ /^\./ && $_ ne 'README.md' } readdir($dh);
+    closedir($dh);
+
+    my @enabled = grep { get_profile_status($_) } @profiles;
+
+    if (@enabled) {
+        print "Active profile: $enabled[0]\n";
+    } else {
+        print "Active profile: none\n";
+    }
+}
+
+sub enable_profile {
+    my ($profile) = @_;
+
+    unless ($profile) {
+        print "Error: profile name required\n";
+        usage();
+    }
+
+    my $optional_file = "$OPTIONAL_DIR/$profile";
+    unless (-f $optional_file) {
+        print "Error: optional profile '$profile' not found\n";
+        print "Run 'manage-profiles list' to see available profiles\n";
+        exit 1;
+    }
+
+    # Check if already enabled
+    if (get_profile_status($profile)) {
+        print "Profile '$profile' is already enabled.\n";
+        return;
+    }
+
+    # Check if any other profiles are enabled (enforce mutual exclusivity)
+    opendir(my $dh, $OPTIONAL_DIR) or die "Cannot open $OPTIONAL_DIR: $!\n";
+    my @all_profiles = grep { -f "$OPTIONAL_DIR/$_" && $_ !~ /^\./ && $_ ne 'README.md' } readdir($dh);
+    closedir($dh);
+
+    my @enabled = grep { get_profile_status($_) } @all_profiles;
+    if (@enabled) {
+        print "WARNING: The following profile(s) are currently enabled:\n";
+        foreach my $p (@enabled) {
+            print "  - $p\n";
+        }
+        print "\nOnly one optional profile can be active at a time.\n";
+        print "Disabling existing profiles...\n\n";
+
+        foreach my $p (@enabled) {
+            disable_profile($p);
+        }
+        print "\n";
+    }
+
+    # Create local override directory if needed
+    unless (-d $APPARMOR_LOCAL_DIR) {
+        print "Creating AppArmor local directory...\n";
+        system("sudo mkdir -p '$APPARMOR_LOCAL_DIR'") == 0
+            or die "Failed to create $APPARMOR_LOCAL_DIR\n";
+    }
+
+    # Create local override file for claude-confined-unpriv
+    my $local_file = "$APPARMOR_LOCAL_DIR/claude-confined-unpriv";
+
+    # Install the optional profile as a separate file
+    my $installed_profile = "$APPARMOR_LOCAL_DIR/claude-confined-optional-$profile";
+
+    # Read optional profile and substitute @HOME@
+    open(my $in, '<', $optional_file) or die "Cannot read $optional_file: $!\n";
+    my $content = do { local $/; <$in> };
+    close($in);
+
+    # Substitute @HOME@
+    my $home = $ENV{HOME};
+    $content =~ s/\@HOME\@/$home/g;
+
+    # Write to temp file first
+    my $temp_file = "/tmp/apparmor-optional-$$.tmp";
+    open(my $out, '>', $temp_file) or die "Cannot write to $temp_file: $!\n";
+    print $out $content;
+    close($out);
+
+    # Install with sudo
+    print "Installing optional profile '$profile'...\n";
+    system("sudo cp '$temp_file' '$installed_profile'") == 0
+        or die "Failed to install profile\n";
+    unlink($temp_file);
+
+    # Add include directive to local override file
+    my $include_line = "#include <local/claude-confined-optional-$profile>\n";
+
+    if (-f $local_file) {
+        # Append to existing file
+        system("echo '$include_line' | sudo tee -a '$local_file' >/dev/null") == 0
+            or die "Failed to update $local_file\n";
+    } else {
+        # Create new file
+        system("echo '$include_line' | sudo tee '$local_file' >/dev/null") == 0
+            or die "Failed to create $local_file\n";
+    }
+
+    # Reload AppArmor profile
+    print "Reloading AppArmor profile...\n";
+    my $apparmor_parser = find_apparmor_parser();
+    unless ($apparmor_parser) {
+        die "Error: apparmor_parser not found\n";
+    }
+
+    system("sudo '$apparmor_parser' -r /etc/apparmor.d/claude-confined") == 0
+        or die "Failed to reload AppArmor profile\n";
+
+    print "✓ Profile '$profile' enabled successfully.\n";
+    print "\nWARNING: Claude now has access to additional files.\n";
+    print "Remember to disable this profile when done: manage-profiles disable $profile\n";
+}
+
+sub disable_profile {
+    my ($profile) = @_;
+
+    unless ($profile) {
+        print "Error: profile name required\n";
+        usage();
+    }
+
+    # Check if enabled
+    unless (get_profile_status($profile)) {
+        print "Profile '$profile' is not enabled.\n";
+        return;
+    }
+
+    my $local_file = "$APPARMOR_LOCAL_DIR/claude-confined-unpriv";
+    my $installed_profile = "$APPARMOR_LOCAL_DIR/claude-confined-optional-$profile";
+
+    # Remove the installed profile
+    if (-f $installed_profile) {
+        print "Removing optional profile '$profile'...\n";
+        system("sudo rm -f '$installed_profile'") == 0
+            or die "Failed to remove $installed_profile\n";
+    }
+
+    # Remove include directive from local override file
+    if (-f $local_file) {
+        print "Updating local override file...\n";
+        my $temp_file = "/tmp/apparmor-local-$$.tmp";
+        my $include_pattern = "claude-confined-optional-$profile";
+
+        system("sudo grep -v '$include_pattern' '$local_file' > '$temp_file' 2>/dev/null || true") == 0
+            or die "Failed to update $local_file\n";
+        system("sudo cp '$temp_file' '$local_file'") == 0
+            or die "Failed to update $local_file\n";
+        unlink($temp_file);
+    }
+
+    # Reload AppArmor profile
+    print "Reloading AppArmor profile...\n";
+    my $apparmor_parser = find_apparmor_parser();
+    unless ($apparmor_parser) {
+        die "Error: apparmor_parser not found\n";
+    }
+
+    system("sudo '$apparmor_parser' -r /etc/apparmor.d/claude-confined") == 0
+        or die "Failed to reload AppArmor profile\n";
+
+    print "✓ Profile '$profile' disabled successfully.\n";
+}
+
+sub find_apparmor_parser {
+    return '/usr/sbin/apparmor_parser' if -x '/usr/sbin/apparmor_parser';
+    return '/sbin/apparmor_parser' if -x '/sbin/apparmor_parser';
+    return 'apparmor_parser' if system('command -v apparmor_parser >/dev/null 2>&1') == 0;
+    return undef;
+}
+
+# Main
+my $command = shift @ARGV || '';
+
+if ($command eq 'list') {
+    list_profiles();
+} elsif ($command eq 'status') {
+    show_status();
+} elsif ($command eq 'enable') {
+    my $profile = shift @ARGV;
+    enable_profile($profile);
+} elsif ($command eq 'disable') {
+    my $profile = shift @ARGV;
+    disable_profile($profile);
+} else {
+    usage();
+}
