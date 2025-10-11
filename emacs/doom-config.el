@@ -16,6 +16,7 @@
   (setq vterm-max-scrollback 10000))
 
 (use-package! monet
+  :demand t  ; Force monet to load immediately so monet-start-server-function is available
   :config
   (monet-mode 1))
 
@@ -36,8 +37,10 @@
   (claude-code-mode)
 
   ;; Integrate with monet for LSP functionality
-  (add-hook 'claude-code-process-environment-functions
-            #'monet-start-server-function)
+  ;; Only add the hook if monet is actually loaded
+  (when (fboundp 'monet-start-server-function)
+    (add-hook 'claude-code-process-environment-functions
+              #'monet-start-server-function))
 
   ;; Set up keybindings (default: C-c c)
   :bind-keymap

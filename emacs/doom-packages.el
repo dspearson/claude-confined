@@ -19,6 +19,7 @@
 (package! vterm)
 
 ;; monet for LSP integration
-(package! monet)
+(package! monet
+  :recipe (:host github :repo "stevemolitor/monet"))
 
 ;;; doom-packages.el ends here

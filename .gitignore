@@ -15,3 +15,4 @@
 
 # Compiled seccomp filter generator
 seccomp/generate-seccomp
+.claude.json
