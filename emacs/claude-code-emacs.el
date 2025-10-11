@@ -42,6 +42,7 @@
 ;; Install monet for LSP integration (optional but recommended)
 (use-package monet
   :vc (:url "https://github.com/stevemolitor/monet" :rev :newest)
+  :demand t  ; Force monet to load immediately so monet-start-server-function is available
   :config
   (monet-mode 1))
 
@@ -69,8 +70,10 @@
 
   ;; Integrate with monet for LSP functionality
   ;; This hook ensures monet is set up for each Claude process
-  (add-hook 'claude-code-process-environment-functions
-            #'monet-start-server-function)
+  ;; Only add the hook if monet is actually loaded
+  (when (fboundp 'monet-start-server-function)
+    (add-hook 'claude-code-process-environment-functions
+              #'monet-start-server-function))
 
   ;; Optional: Set up custom keybindings
   ;; The default is "C-c c" but you can change it here

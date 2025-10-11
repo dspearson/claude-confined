@@ -184,6 +184,18 @@ fi
 [[ -d /lib/terminfo ]] && BWRAP_ARGS+=(--ro-bind /lib/terminfo /lib/terminfo)
 [[ -d /etc/terminfo ]] && BWRAP_ARGS+=(--ro-bind /etc/terminfo /etc/terminfo)
 
+# Java configuration directories (conditional, for JVM-based tools like Clojure)
+# Check for common Java version directories
+if [[ -d /etc/java-21-openjdk ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/java-21-openjdk /etc/java-21-openjdk)
+fi
+if [[ -d /etc/java-17-openjdk ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/java-17-openjdk /etc/java-17-openjdk)
+fi
+if [[ -d /etc/java-11-openjdk ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/java-11-openjdk /etc/java-11-openjdk)
+fi
+
 # Bind user-specific paths (read-only)
 [[ -d "${HOME}/.bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.bin" "${HOME}/.bin")
 [[ -d "${HOME}/.config/emacs/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.config/emacs/bin" "${HOME}/.config/emacs/bin")
@@ -194,6 +206,9 @@ fi
 # JavaScript/Node runtimes
 [[ -d "${HOME}/.nvm" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.nvm" "${HOME}/.nvm")
 [[ -d "${HOME}/.bun" ]] && BWRAP_ARGS+=(--bind "${HOME}/.bun" "${HOME}/.bun")
+
+# Clojure configuration and cache
+[[ -d "${HOME}/.clojure" ]] && BWRAP_ARGS+=(--bind "${HOME}/.clojure" "${HOME}/.clojure")
 
 # Nix store and configuration (if exists)
 if [[ -d /nix ]]; then
