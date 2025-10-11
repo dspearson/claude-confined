@@ -175,6 +175,15 @@ BWRAP_ARGS=(
     --tmpfs /tmp
 )
 
+# Additional system configuration (conditional)
+[[ -f /etc/ld.so.conf ]] && BWRAP_ARGS+=(--ro-bind /etc/ld.so.conf /etc/ld.so.conf)
+[[ -f /etc/ld.so.cache ]] && BWRAP_ARGS+=(--ro-bind /etc/ld.so.cache /etc/ld.so.cache)
+[[ -d /etc/ld.so.conf.d ]] && BWRAP_ARGS+=(--ro-bind /etc/ld.so.conf.d /etc/ld.so.conf.d)
+[[ -f /etc/localtime ]] && BWRAP_ARGS+=(--ro-bind /etc/localtime /etc/localtime)
+[[ -f /etc/timezone ]] && BWRAP_ARGS+=(--ro-bind /etc/timezone /etc/timezone)
+[[ -f /etc/gitconfig ]] && BWRAP_ARGS+=(--ro-bind /etc/gitconfig /etc/gitconfig)
+[[ -d /etc/bash_completion.d ]] && BWRAP_ARGS+=(--ro-bind /etc/bash_completion.d /etc/bash_completion.d)
+
 # Debian alternatives system (conditional)
 [[ -d /etc/alternatives ]] && BWRAP_ARGS+=(--ro-bind /etc/alternatives /etc/alternatives)
 
@@ -186,6 +195,11 @@ fi
 # Additional terminfo locations (conditional)
 [[ -d /lib/terminfo ]] && BWRAP_ARGS+=(--ro-bind /lib/terminfo /lib/terminfo)
 [[ -d /etc/terminfo ]] && BWRAP_ARGS+=(--ro-bind /etc/terminfo /etc/terminfo)
+
+# Locale and documentation (conditional)
+[[ -d /usr/lib/locale ]] && BWRAP_ARGS+=(--ro-bind /usr/lib/locale /usr/lib/locale)
+[[ -d /usr/share/locale ]] && BWRAP_ARGS+=(--ro-bind /usr/share/locale /usr/share/locale)
+[[ -d /usr/share/man ]] && BWRAP_ARGS+=(--ro-bind /usr/share/man /usr/share/man)
 
 # Java configuration directories (conditional, for JVM-based tools like Clojure)
 # Check for common Java version directories
