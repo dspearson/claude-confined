@@ -175,6 +175,9 @@ BWRAP_ARGS=(
     --tmpfs /tmp
 )
 
+# Debian alternatives system (conditional)
+[[ -d /etc/alternatives ]] && BWRAP_ARGS+=(--ro-bind /etc/alternatives /etc/alternatives)
+
 # AppArmor integration
 if command -v aa-exec >/dev/null 2>&1 && [[ -d /sys/kernel/security/apparmor ]]; then
     BWRAP_ARGS+=(--ro-bind /sys/kernel/security /sys/kernel/security)
@@ -209,6 +212,10 @@ fi
 
 # Clojure configuration and cache
 [[ -d "${HOME}/.clojure" ]] && BWRAP_ARGS+=(--bind "${HOME}/.clojure" "${HOME}/.clojure")
+
+# Git configuration (read-only)
+[[ -f "${HOME}/.gitconfig" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.gitconfig" "${HOME}/.gitconfig")
+[[ -d "${HOME}/.config/git" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.config/git" "${HOME}/.config/git")
 
 # Nix store and configuration (if exists)
 if [[ -d /nix ]]; then
