@@ -267,8 +267,8 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # System directories (read-only, mmap, execute with profile transition)
     /usr/** mrpix -> &claude-confined-unpriv,
-    /lib/** mrix,
-    /lib64/** mrix,
+    /lib/** mrpix -> &claude-confined-unpriv,
+    /lib64/** mrpix -> &claude-confined-unpriv,
     /bin/** mrpix -> &claude-confined-unpriv,
     /sbin/** mrpix -> &claude-confined-unpriv,
     /etc/** r,
@@ -287,20 +287,20 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # Writable system temp
     /tmp/ r,
-    /tmp/** rwlkm,
+    /tmp/** rwlkmpix -> &claude-confined-unpriv,
 
     # Claude directories (read-write)
     owner @{HOME}/.claude/ r,
-    owner @{HOME}/.claude/** rwlkm,
+    owner @{HOME}/.claude/** rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.config/claude/ r,
-    owner @{HOME}/.config/claude/** rwlkm,
-    owner @{HOME}/.claude.json* rwlkm,
+    owner @{HOME}/.config/claude/** rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/.claude.json* rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.claude.json.lock/ r,
-    owner @{HOME}/.claude.json.lock/** rwlkm,
+    owner @{HOME}/.claude.json.lock/** rwlkmpix -> &claude-confined-unpriv,
 
     # SSH keys - ONLY from ~/.claude/ssh (bwrap mounts ~/.claude/ssh as ~/.ssh)
     owner @{HOME}/.ssh/ r,
-    owner @{HOME}/.ssh/** rw,
+    owner @{HOME}/.ssh/** rwmpix -> &claude-confined-unpriv,
 
     # User bin directories
     owner @{HOME}/.bin/** mrpix -> &claude-confined-unpriv,
@@ -310,7 +310,7 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # Cargo (full access except credentials which are denied above)
     owner @{HOME}/.cargo/ r,
-    owner @{HOME}/.cargo/** rwlkm,
+    owner @{HOME}/.cargo/** rwlkmpix -> &claude-confined-unpriv,
 
     # Rustup toolchain manager
     owner @{HOME}/.rustup/ r,
@@ -323,26 +323,26 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
 
     # Clojure configuration and cache
     owner @{HOME}/.clojure/ r,
-    owner @{HOME}/.clojure/** rwlkm,
+    owner @{HOME}/.clojure/** rwlkmpix -> &claude-confined-unpriv,
 
     # Git configuration (read-only)
-    owner @{HOME}/.gitconfig r,
-    owner @{HOME}/.config/git/** r,
+    owner @{HOME}/.gitconfig mr,
+    owner @{HOME}/.config/git/** mrpix -> &claude-confined-unpriv,
 
     # XDG directories
-    owner @{HOME}/.cache/** rwlkm,
-    owner @{HOME}/.local/share/** rwlkm,
+    owner @{HOME}/.cache/** rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/.local/share/** rwlkmpix -> &claude-confined-unpriv,
     audit deny @{HOME}/.local/share/keyrings/** rwlkx,
 
-    # Project directories under $HOME (read-write, but NOT dotfiles)
+    # Project directories under $HOME (read-write with execute, but NOT dotfiles)
     # [^.] ensures we don't match hidden directories to avoid conflicts
-    owner @{HOME}/[^.]* rwlkm,
-    owner @{HOME}/[^.]*/** rwlkm,
+    owner @{HOME}/[^.]* rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/[^.]*/** rwlkmpix -> &claude-confined-unpriv,
 
     # Allow any user-owned paths bind-mounted by bwrap (after deny rules)
     # This allows project directories in arbitrary locations (e.g., /workspace, /zpool)
     # Safe because: deny rules above block sensitive files, and 'owner' restricts to user's files
-    owner /** rwlkm,
+    owner /** rwlkmpix -> &claude-confined-unpriv,
 
     # Network
     network,
