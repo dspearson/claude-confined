@@ -203,6 +203,9 @@ fi
 
 # Java configuration directories (conditional, for JVM-based tools like Clojure)
 # Check for common Java version directories
+if [[ -d /etc/java-26-openjdk ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/java-26-openjdk /etc/java-26-openjdk)
+fi
 if [[ -d /etc/java-21-openjdk ]]; then
     BWRAP_ARGS+=(--ro-bind /etc/java-21-openjdk /etc/java-21-openjdk)
 fi
@@ -226,6 +229,12 @@ fi
 
 # Clojure configuration and cache
 [[ -d "${HOME}/.clojure" ]] && BWRAP_ARGS+=(--bind "${HOME}/.clojure" "${HOME}/.clojure")
+[[ -d "${HOME}/.m2" ]] && BWRAP_ARGS+=(--bind "${HOME}/.m2" "${HOME}/.m2")
+[[ -d "${HOME}/.gitlibs" ]] && BWRAP_ARGS+=(--bind "${HOME}/.gitlibs" "${HOME}/.gitlibs")
+
+# XDG directories for application data and cache
+[[ -d "${HOME}/.local/share" ]] && BWRAP_ARGS+=(--bind "${HOME}/.local/share" "${HOME}/.local/share")
+[[ -d "${HOME}/.cache" ]] && BWRAP_ARGS+=(--bind "${HOME}/.cache" "${HOME}/.cache")
 
 # Git configuration (read-only)
 [[ -f "${HOME}/.gitconfig" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.gitconfig" "${HOME}/.gitconfig")
@@ -340,6 +349,10 @@ CURRENT_GID=$(id -g)
 
 BWRAP_ARGS+=(
     --setenv TMPDIR /tmp/claude
+    --setenv XDG_DATA_HOME "${HOME}/.local/share"
+    --setenv XDG_CACHE_HOME "${HOME}/.cache"
+    --setenv XDG_CONFIG_HOME "${HOME}/.config"
+    --setenv CLJ_CONFIG "${HOME}/.clojure"
     --chdir "${INITIAL_CWD}"
     --unshare-user
     --uid "${CURRENT_UID}"
