@@ -130,6 +130,40 @@ claude-confined --bash "cat /proc/self/status"
 DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
 ```
 
+## Claude-Flow Integration
+
+Claude-confined includes first-class support for [claude-flow](https://github.com/ruvnet/claude-flow), an AI orchestration platform with swarm intelligence and persistent memory.
+
+**What's included:**
+- `~/.swarm/` - Cross-project memory and AgentDB storage (bind-mounted by default)
+- `~/.claude-flow/` - Configuration and state (bind-mounted by default)
+- `~/.hive-mind/` - Hive-mind session persistence (bind-mounted by default)
+
+**Quick start:**
+
+```bash
+# Install claude-flow globally
+bun install -g claude-flow@alpha
+
+# Add claude-flow MCP server (for use within Claude)
+claude mcp add claude-flow claude-flow mcp start
+
+# Method 1: Use claude-flow CLI directly (sandboxed)
+cd ~/my-project
+claude-confined --flow --version
+claude-confined --flow memory store api_key "REST endpoints" --namespace backend
+claude-confined --flow memory query "API" --namespace backend
+claude-confined --flow swarm "build authentication" --claude
+
+# Method 2: Use within Claude Code (memory persists across all projects!)
+cd ~/my-project
+claude-confined
+
+# Within Claude:
+# "Store this API design in memory"
+# "Use the hive-mind to coordinate multiple agents"
+```
+
 ## Emacs Integration
 
 Use `claude-confined` directly in Emacs with [`claude-code.el`](https://github.com/stevemolitor/claude-code.el):
@@ -165,6 +199,9 @@ See [emacs/EMACS.md](emacs/EMACS.md) for complete installation and usage instruc
 - **`~/.claude/`** - Full read/write (Claude state, temporary files, logs)
 - **`~/.config/claude/`** - Read/write (Claude configuration)
 - **`~/.claude/ssh/`** - Mapped to `~/.ssh` inside sandbox (if directory exists)
+- **`~/.swarm/`** - Read/write (claude-flow memory and AgentDB storage)
+- **`~/.claude-flow/`** - Read/write (claude-flow configuration and state)
+- **`~/.hive-mind/`** - Read/write (claude-flow hive-mind sessions)
 - **System binaries** - Read/execute only (`/usr`, `/bin`, `/lib`, etc.)
 - **Nix store** - Read/execute only (if `/nix` exists)
 - **Additional paths** - Via `--allow` or `--ro-allow` flags

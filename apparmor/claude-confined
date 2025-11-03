@@ -104,6 +104,14 @@ profile claude-confined @{HOME}/.local/bin/claude-confined flags=(enforce) {
   owner @{HOME}/.config/claude/ rw,
   owner @{HOME}/.config/claude/** rw,
 
+  # Claude-flow directories (read-write, for cross-project memory and coordination)
+  owner @{HOME}/.swarm/ rw,
+  owner @{HOME}/.swarm/** rw,
+  owner @{HOME}/.claude-flow/ rw,
+  owner @{HOME}/.claude-flow/** rw,
+  owner @{HOME}/.hive-mind/ rw,
+  owner @{HOME}/.hive-mind/** rw,
+
   # System tmp (tmpfs from bwrap)
   /tmp/ rw,
   /tmp/** rw,
@@ -297,6 +305,14 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
     owner @{HOME}/.claude.json* rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.claude.json.lock/ r,
     owner @{HOME}/.claude.json.lock/** rwlkmpix -> &claude-confined-unpriv,
+
+    # Claude-flow directories (read-write, for cross-project memory and coordination)
+    owner @{HOME}/.swarm/ r,
+    owner @{HOME}/.swarm/** rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/.claude-flow/ r,
+    owner @{HOME}/.claude-flow/** rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/.hive-mind/ r,
+    owner @{HOME}/.hive-mind/** rwlkmpix -> &claude-confined-unpriv,
 
     # SSH keys - ONLY from ~/.claude/ssh (bwrap mounts ~/.claude/ssh as ~/.ssh)
     owner @{HOME}/.ssh/ r,

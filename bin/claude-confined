@@ -18,6 +18,10 @@ declare -a ADDITIONAL_RO_PATHS=()
 # Debug mode - run arbitrary bash command instead of claude
 DEBUG_COMMAND=""
 
+# Flow mode - run claude-flow instead of claude
+FLOW_MODE=false
+FLOW_ARGS=()
+
 # Add current working directory by default
 INITIAL_CWD=$(pwd -P)
 
@@ -87,6 +91,15 @@ while [[ $# -gt 0 ]]; do
             DEBUG_COMMAND="$1"
             shift
             ;;
+        --flow)
+            FLOW_MODE=true
+            shift
+            # Collect all remaining arguments for claude-flow
+            while [[ $# -gt 0 ]]; do
+                FLOW_ARGS+=("$1")
+                shift
+            done
+            ;;
         --help)
             cat <<EOF
 Usage: claude-confined [OPTIONS] [CLAUDE_ARGS...]
@@ -95,20 +108,25 @@ Sandbox options:
   --allow PATH        Allow read-write access to PATH (can be specified multiple times)
   --ro-allow PATH     Allow read-only access to PATH (can be specified multiple times)
   --bash COMMAND      Run arbitrary command in sandbox instead of claude (for debugging)
+  --flow [ARGS...]    Run claude-flow instead of claude (all remaining args passed to claude-flow)
   --help              Show this help message
 
 Environment variables:
   DANGEROUSLY_SKIP_PERMISSIONS  If set, automatically pass --dangerously-skip-permissions to claude
 
 By default, the current working directory and ~/.claude are accessible.
+Claude-flow directories (~/.swarm, ~/.claude-flow, ~/.hive-mind) are also accessible.
 
-All other arguments are passed to claude.
+All other arguments are passed to claude (or claude-flow with --flow).
 
 Examples:
   claude-confined --allow /path/to/project
   claude-confined --allow /home/user/project1 --ro-allow /home/user/docs
   claude-confined --allow . chat
   claude-confined --dangerously-skip-permissions
+  claude-confined --flow --version
+  claude-confined --flow memory store key "value" --namespace test
+  claude-confined --flow swarm "build REST API" --claude
   DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
 
 EOF
@@ -273,6 +291,18 @@ if [[ -d "${CLAUDE_DIR}/ssh" ]]; then
     BWRAP_ARGS+=(--bind "${CLAUDE_DIR}/ssh" "${HOME}/.ssh")
 fi
 
+# Claude-flow directories (read-write, for cross-project memory and coordination)
+for claude_flow_dir in ".swarm" ".claude-flow" ".hive-mind"; do
+    dir_path="${HOME}/${claude_flow_dir}"
+    if [[ -d "${dir_path}" ]]; then
+        BWRAP_ARGS+=(--bind "${dir_path}" "${dir_path}")
+    elif [[ ! -e "${dir_path}" ]]; then
+        # Create directory if it doesn't exist so it can be written to
+        mkdir -p "${dir_path}"
+        BWRAP_ARGS+=(--bind "${dir_path}" "${dir_path}")
+    fi
+done
+
 # Check for enabled optional AppArmor profiles and bind corresponding directories
 # Define profile->directories mapping (data-driven approach)
 declare -A PROFILE_DIRS=(
@@ -306,6 +336,9 @@ declare -A BOUND_PATHS
 BOUND_PATHS["${CLAUDE_DIR}"]=1
 BOUND_PATHS["${CLAUDE_TMP}"]=1
 BOUND_PATHS["${CLAUDE_CONFIG}"]=1
+BOUND_PATHS["${HOME}/.swarm"]=1
+BOUND_PATHS["${HOME}/.claude-flow"]=1
+BOUND_PATHS["${HOME}/.hive-mind"]=1
 
 # Add current working directory if not already bound
 if [[ ! -v BOUND_PATHS["${INITIAL_CWD}"] ]]; then
@@ -409,6 +442,27 @@ fi
 if [[ -n "${DEBUG_COMMAND}" ]]; then
     # Debug mode - run arbitrary command
     exec bwrap "${BWRAP_ARGS[@]}" /bin/bash -c "${DEBUG_COMMAND}"
+elif [[ "${FLOW_MODE}" == "true" ]]; then
+    # Flow mode - run claude-flow
+    # First try to find globally installed claude-flow
+    CLAUDE_FLOW_BIN=""
+    if [[ -x "${HOME}/.bun/bin/claude-flow" ]]; then
+        CLAUDE_FLOW_BIN="${HOME}/.bun/bin/claude-flow"
+    elif command -v claude-flow >/dev/null 2>&1; then
+        CLAUDE_FLOW_BIN=$(command -v claude-flow)
+    fi
+
+    if [[ -n "${CLAUDE_FLOW_BIN}" ]]; then
+        # Use globally installed claude-flow
+        CLAUDE_FLOW_REAL=$(readlink -f "${CLAUDE_FLOW_BIN}")
+        exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" "${CLAUDE_FLOW_REAL}" "${FLOW_ARGS[@]}"
+    else
+        # Fallback: Use bun x to fetch package
+        # Support CLAUDE_FLOW_PACKAGE env var for custom package/branch
+        FLOW_PACKAGE="${CLAUDE_FLOW_PACKAGE:-claude-flow@alpha}"
+        echo "Warning: claude-flow not found globally, using: bun x ${FLOW_PACKAGE}" >&2
+        exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" x "${FLOW_PACKAGE}" "${FLOW_ARGS[@]}"
+    fi
 else
     # Normal mode - run claude
     exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" "${CLAUDE_CLI}" "${CLAUDE_ARGS[@]}"
