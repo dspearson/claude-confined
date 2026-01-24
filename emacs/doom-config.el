@@ -37,10 +37,11 @@
   (claude-code-mode)
 
   ;; Integrate with monet for LSP functionality
-  ;; Only add the hook if monet is actually loaded
-  (when (fboundp 'monet-start-server-function)
-    (add-hook 'claude-code-process-environment-functions
-              #'monet-start-server-function))
+  ;; Use with-eval-after-load to ensure monet is fully loaded before adding hook
+  (with-eval-after-load 'monet
+    (when (fboundp 'monet-start-server-function)
+      (add-hook 'claude-code-process-environment-functions
+                #'monet-start-server-function)))
 
   ;; Set up keybindings (default: C-c c)
   :bind-keymap

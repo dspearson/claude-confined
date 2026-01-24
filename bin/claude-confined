@@ -188,6 +188,7 @@ BWRAP_ARGS=(
     --ro-bind /etc/ssl /etc/ssl
     --ro-bind /etc/ca-certificates /etc/ca-certificates
     --ro-bind /usr/share/terminfo /usr/share/terminfo
+    --bind $HOME/node_modules $HOME/node_modules
     --proc /proc
     --dev /dev
     --tmpfs /tmp
@@ -236,6 +237,7 @@ fi
 
 # Bind user-specific paths (read-only)
 [[ -d "${HOME}/.bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.bin" "${HOME}/.bin")
+[[ -d "${HOME}/.local/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.local/bin" "${HOME}/.local/bin")
 [[ -d "${HOME}/.config/emacs/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.config/emacs/bin" "${HOME}/.config/emacs/bin")
 [[ -d "${HOME}/.cargo/bin" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.cargo/bin" "${HOME}/.cargo/bin")
 [[ -d "${HOME}/.rustup" ]] && BWRAP_ARGS+=(--bind "${HOME}/.rustup" "${HOME}/.rustup")
@@ -459,7 +461,7 @@ elif [[ "${FLOW_MODE}" == "true" ]]; then
     else
         # Fallback: Use bun x to fetch package
         # Support CLAUDE_FLOW_PACKAGE env var for custom package/branch
-        FLOW_PACKAGE="${CLAUDE_FLOW_PACKAGE:-claude-flow@alpha}"
+        FLOW_PACKAGE="${CLAUDE_FLOW_PACKAGE:-claude-flow@latest}"
         echo "Warning: claude-flow not found globally, using: bun x ${FLOW_PACKAGE}" >&2
         exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" x "${FLOW_PACKAGE}" "${FLOW_ARGS[@]}"
     fi
