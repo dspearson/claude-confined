@@ -1,10 +1,16 @@
 #!/bin/bash
-# claude-confined - Run Claude Code in a bubblewrap sandbox
+# claude-confined - Run Claude Code in a sandboxed environment
 # This script restricts Claude's access to the filesystem and system resources
+#
+# On Linux: Uses bubblewrap (bwrap) + AppArmor + seccomp
+# On macOS: Uses sandbox-exec with Seatbelt profiles
 #
 # Usage: claude-confined [--allow PATH]... [--ro-allow PATH]... [claude-options]
 
 set -euo pipefail
+
+# Detect operating system
+OS_TYPE="$(uname -s)"
 
 # Configuration
 CLAUDE_DIR="${HOME}/.claude"
@@ -18,7 +24,7 @@ declare -a ADDITIONAL_RO_PATHS=()
 # Debug mode - run arbitrary bash command instead of claude
 DEBUG_COMMAND=""
 
-# Flow mode - run claude-flow instead of claude
+# Flow mode - run ruflo instead of claude
 FLOW_MODE=false
 FLOW_ARGS=()
 
@@ -94,7 +100,7 @@ while [[ $# -gt 0 ]]; do
         --flow)
             FLOW_MODE=true
             shift
-            # Collect all remaining arguments for claude-flow
+            # Collect all remaining arguments for ruflo
             while [[ $# -gt 0 ]]; do
                 FLOW_ARGS+=("$1")
                 shift
@@ -104,20 +110,26 @@ while [[ $# -gt 0 ]]; do
             cat <<EOF
 Usage: claude-confined [OPTIONS] [CLAUDE_ARGS...]
 
+Run Claude Code in a sandboxed environment with restricted filesystem access.
+
+Platform support:
+  Linux   Uses bubblewrap (bwrap) + AppArmor + seccomp
+  macOS   Uses sandbox-exec with Seatbelt profiles
+
 Sandbox options:
   --allow PATH        Allow read-write access to PATH (can be specified multiple times)
   --ro-allow PATH     Allow read-only access to PATH (can be specified multiple times)
   --bash COMMAND      Run arbitrary command in sandbox instead of claude (for debugging)
-  --flow [ARGS...]    Run claude-flow instead of claude (all remaining args passed to claude-flow)
+  --flow [ARGS...]    Run ruflo instead of claude (all remaining args passed to ruflo)
   --help              Show this help message
 
 Environment variables:
   DANGEROUSLY_SKIP_PERMISSIONS  If set, automatically pass --dangerously-skip-permissions to claude
 
 By default, the current working directory and ~/.claude are accessible.
-Claude-flow directories (~/.swarm, ~/.claude-flow, ~/.hive-mind) are also accessible.
+Ruflo directories (~/.swarm, ~/.claude-flow, ~/.hive-mind) are also accessible.
 
-All other arguments are passed to claude (or claude-flow with --flow).
+All other arguments are passed to claude (or ruflo with --flow).
 
 Examples:
   claude-confined --allow /path/to/project
@@ -126,7 +138,7 @@ Examples:
   claude-confined --dangerously-skip-permissions
   claude-confined --flow --version
   claude-confined --flow memory store key "value" --namespace test
-  claude-confined --flow swarm "build REST API" --claude
+  claude-confined --flow swarm "build REST API"
   DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
 
 EOF
@@ -153,25 +165,323 @@ if [[ -f "${GLOBAL_PROMPT_FILE}" ]]; then
     fi
 fi
 
-# Find bun
-BUN_BIN=$(command -v bun)
-if [ -z "${BUN_BIN}" ]; then
-    echo "Error: bun not found in PATH" >&2
+# Cross-platform realpath function (macOS doesn't have readlink -f)
+resolve_path() {
+    if [[ "${OS_TYPE}" == "Darwin" ]]; then
+        # Use Python as fallback on macOS (always available)
+        python3 -c "import os; print(os.path.realpath('$1'))"
+    else
+        readlink -f "$1"
+    fi
+}
+
+# Find claude (not needed for --bash debug mode)
+if [[ -z "${DEBUG_COMMAND}" ]] && [[ "${FLOW_MODE}" == "false" ]]; then
+    CLAUDE_BIN=$(command -v claude)
+    if [ -z "${CLAUDE_BIN}" ]; then
+        echo "Error: claude not found in PATH" >&2
+        exit 1
+    fi
+
+    # Resolve to the actual binary
+    CLAUDE_REAL=$(resolve_path "${CLAUDE_BIN}")
+fi
+
+# ============================================================================
+# macOS Sandbox Implementation (using sandbox-exec with Seatbelt profiles)
+# ============================================================================
+
+generate_macos_sandbox_profile() {
+    # Generate a Seatbelt profile (SBPL) for macOS sandbox-exec
+    # Whitelist-only model: only explicitly allowed paths are accessible
+    # This mirrors the Linux bwrap bind-mount approach
+
+    local profile=""
+
+    # Start with version and deny-by-default
+    profile+="(version 1)"$'\n'
+    profile+="(deny default)"$'\n'
+
+    # ========================================================================
+    # Process execution - whitelist only
+    # ========================================================================
+    profile+="(allow process-fork)"$'\n'
+
+    # Allow execution from system and dev tool paths
+    profile+="(allow process-exec (subpath \"/usr\"))"$'\n'
+    profile+="(allow process-exec (subpath \"/bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"/sbin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"/opt/homebrew\"))"$'\n'
+    profile+="(allow process-exec (subpath \"/Library/Developer\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.bun\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.cargo/bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.local/bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.nvm\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.rustup\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.nix-profile/bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.config/emacs/bin\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${INITIAL_CWD}\"))"$'\n'
+
+    # Deny dangerous commands (overrides the allows above)
+    profile+="(deny process-exec (literal \"/usr/bin/sudo\"))"$'\n'
+    profile+="(deny process-exec (literal \"/usr/bin/su\"))"$'\n'
+    profile+="(deny process-exec (literal \"/usr/bin/login\"))"$'\n'
+    profile+="(deny process-exec (literal \"/usr/bin/doas\"))"$'\n'
+    profile+="(deny process-exec (literal \"/sbin/mount\"))"$'\n'
+    profile+="(deny process-exec (literal \"/sbin/umount\"))"$'\n'
+    profile+="(deny process-exec (literal \"/usr/sbin/diskutil\"))"$'\n'
+    profile+="(deny process-exec (literal \"/usr/bin/security\"))"$'\n'
+
+    # Allow signals within sandbox only
+    profile+="(allow signal (target same-sandbox))"$'\n'
+
+    # ========================================================================
+    # System read access (equivalent to bwrap ro-bind)
+    # ========================================================================
+    profile+="(allow file-read* (literal \"/\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/usr\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/bin\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/sbin\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/Library\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/System\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/private/etc\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/private/var\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/var\"))"$'\n'
+    profile+="(allow file-read* (literal \"/etc\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/etc\"))"$'\n'
+    profile+="(allow file-read* (literal \"/tmp\"))"$'\n'
+    profile+="(allow file-read* (literal \"/private/tmp\"))"$'\n'
+    profile+="(allow file-read* (literal \"/dev/null\"))"$'\n'
+    profile+="(allow file-read* (literal \"/dev/random\"))"$'\n'
+    profile+="(allow file-read* (literal \"/dev/urandom\"))"$'\n'
+
+    # Homebrew paths (Intel and Apple Silicon)
+    profile+="(allow file-read* (subpath \"/opt/homebrew\"))"$'\n'
+    profile+="(allow file-read* (subpath \"/usr/local\"))"$'\n'
+
+    # Dev devices
+    profile+="(allow file-write* (literal \"/dev/null\"))"$'\n'
+    profile+="(allow file-write* (regex #\"^/dev/ttys[0-9]+$\"))"$'\n'
+    profile+="(allow file-write* (literal \"/dev/ptmx\"))"$'\n'
+    profile+="(allow file-read* (regex #\"^/dev/ttys[0-9]+$\"))"$'\n'
+    profile+="(allow file-read* (literal \"/dev/ptmx\"))"$'\n'
+    profile+="(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))"$'\n'
+    profile+="(allow pseudo-tty)"$'\n'
+
+    # Nix store (if exists)
+    profile+="(allow file-read* (subpath \"/nix\"))"$'\n'
+
+    # ========================================================================
+    # Home directory - WHITELIST ONLY (mirrors Linux bwrap bind mounts)
+    # No broad $HOME read access. Only explicitly listed paths are accessible.
+    # ========================================================================
+
+    # Deny credentials that live under otherwise-allowed paths
+    # (file-read-data and file-read-metadata needed on macOS 26+ to override allows)
+    profile+="(deny file-read-data (regex #\"\.cargo/credentials\"))"$'\n'
+    profile+="(deny file-read-metadata (regex #\"\.cargo/credentials\"))"$'\n'
+    profile+="(deny file-write* (regex #\"\.cargo/credentials\"))"$'\n'
+    profile+="(deny file-read-data (subpath \"${HOME}/.local/share/keyrings\"))"$'\n'
+    profile+="(deny file-read-metadata (subpath \"${HOME}/.local/share/keyrings\"))"$'\n'
+    profile+="(deny file-write* (subpath \"${HOME}/.local/share/keyrings\"))"$'\n'
+
+    # Claude directories (read-write)
+    profile+="(allow file-read* (subpath \"${CLAUDE_DIR}\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${CLAUDE_DIR}\"))"$'\n'
+    profile+="(allow file-read* (literal \"${HOME}/.claude.json\"))"$'\n'
+    profile+="(allow file-write* (literal \"${HOME}/.claude.json\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${CLAUDE_CONFIG}\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${CLAUDE_CONFIG}\"))"$'\n'
+
+    # Ruflo directories (read-write)
+    profile+="(allow file-read* (subpath \"${HOME}/.swarm\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.swarm\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.claude-flow\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.claude-flow\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.hive-mind\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.hive-mind\"))"$'\n'
+
+    # GitHub/GitLab CLI (read-write)
+    profile+="(allow file-read* (subpath \"${HOME}/.config/gh\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.config/gh\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.config/glab-cli\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.config/glab-cli\"))"$'\n'
+
+    # Node/npm (read-write)
+    profile+="(allow file-read* (subpath \"${HOME}/.npm\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.npm\"))"$'\n'
+
+    # Bun runtime (read-write, kept for tools that still use bun)
+    profile+="(allow file-read* (subpath \"${HOME}/.bun\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.bun\"))"$'\n'
+
+    # JavaScript/Node
+    profile+="(allow file-read* (subpath \"${HOME}/.nvm\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/node_modules\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/node_modules\"))"$'\n'
+
+    # Cargo/Rust (read-write, credentials denied above)
+    profile+="(allow file-read* (subpath \"${HOME}/.cargo\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.cargo\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.rustup\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.rustup\"))"$'\n'
+
+    # Clojure/Maven
+    profile+="(allow file-read* (subpath \"${HOME}/.clojure\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.clojure\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.m2\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.m2\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.gitlibs\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.gitlibs\"))"$'\n'
+
+    # Git configuration (read-only)
+    profile+="(allow file-read* (literal \"${HOME}/.gitconfig\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.config/git\"))"$'\n'
+
+    # XDG directories (read-write, keyrings denied above)
+    profile+="(allow file-read* (subpath \"${HOME}/.local/share\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.local/share\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.cache\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.cache\"))"$'\n'
+
+    # User bin directories (read-only/execute)
+    profile+="(allow file-read* (subpath \"${HOME}/.bin\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.local/bin\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.config/emacs/bin\"))"$'\n'
+    profile+="(allow file-read* (subpath \"${HOME}/.nix-profile/bin\"))"$'\n'
+
+    # Current working directory (read-write)
+    profile+="(allow file-read* (subpath \"${INITIAL_CWD}\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${INITIAL_CWD}\"))"$'\n'
+
+    # Additional read-write paths (--allow)
+    if [[ ${#ADDITIONAL_RW_PATHS[@]} -gt 0 ]]; then
+        for path_pair in "${ADDITIONAL_RW_PATHS[@]}"; do
+            IFS=':' read -r source_path target_path <<< "${path_pair}"
+            if [[ -e "${source_path}" ]]; then
+                profile+="(allow file-read* (subpath \"${source_path}\"))"$'\n'
+                profile+="(allow file-write* (subpath \"${source_path}\"))"$'\n'
+            fi
+        done
+    fi
+
+    # Additional read-only paths (--ro-allow)
+    if [[ ${#ADDITIONAL_RO_PATHS[@]} -gt 0 ]]; then
+        for path_pair in "${ADDITIONAL_RO_PATHS[@]}"; do
+            IFS=':' read -r source_path target_path <<< "${path_pair}"
+            if [[ -e "${source_path}" ]]; then
+                profile+="(allow file-read* (subpath \"${source_path}\"))"$'\n'
+            fi
+        done
+    fi
+
+    # ========================================================================
+    # Temp directories (read-write)
+    # ========================================================================
+    profile+="(allow file-read* (subpath \"/private/var/folders\"))"$'\n'
+    profile+="(allow file-write* (subpath \"/private/var/folders\"))"$'\n'
+    profile+="(allow file-write* (subpath \"/private/tmp\"))"$'\n'
+
+    # ========================================================================
+    # Network (required for API calls)
+    # ========================================================================
+    profile+="(allow network-outbound)"$'\n'
+    profile+="(allow network-inbound)"$'\n'
+    profile+="(allow system-socket)"$'\n'
+
+    # ========================================================================
+    # System services
+    # ========================================================================
+    profile+="(allow mach-lookup)"$'\n'
+    profile+="(allow sysctl-read)"$'\n'
+    profile+="(allow iokit-open)"$'\n'
+    profile+="(allow user-preference-read)"$'\n'
+
+    # Process info
+    profile+="(allow process-info-pidinfo)"$'\n'
+    profile+="(allow process-info-setcontrol)"$'\n'
+    profile+="(allow process-info-dirtycontrol)"$'\n'
+
+    echo "${profile}"
+}
+
+run_macos_sandbox() {
+    local cmd_to_run=("$@")
+
+    # Check for sandbox-exec availability
+    if ! command -v sandbox-exec >/dev/null 2>&1; then
+        echo "Error: sandbox-exec not found. macOS sandboxing unavailable." >&2
+        exit 1
+    fi
+
+    # Generate the sandbox profile
+    local profile
+    profile=$(generate_macos_sandbox_profile)
+
+    # Execute with sandbox
+    exec sandbox-exec -p "${profile}" "${cmd_to_run[@]}"
+}
+
+# ============================================================================
+# macOS execution path
+# ============================================================================
+
+if [[ "${OS_TYPE}" == "Darwin" ]]; then
+    # macOS sandbox using sandbox-exec
+
+    if [[ -n "${DEBUG_COMMAND}" ]]; then
+        # Debug mode - run arbitrary command
+        run_macos_sandbox /bin/bash -c "${DEBUG_COMMAND}"
+    elif [[ "${FLOW_MODE}" == "true" ]]; then
+        # Flow mode - run ruflo
+        RUFLO_BIN=""
+        if command -v ruflo >/dev/null 2>&1; then
+            RUFLO_BIN=$(command -v ruflo)
+        fi
+
+        if [[ -n "${RUFLO_BIN}" ]]; then
+            RUFLO_REAL=$(resolve_path "${RUFLO_BIN}")
+            run_macos_sandbox "${RUFLO_REAL}" ${FLOW_ARGS[@]+"${FLOW_ARGS[@]}"}
+        else
+            FLOW_PACKAGE="${RUFLO_PACKAGE:-ruflo@latest}"
+            echo "Warning: ruflo not found globally, using: npx ${FLOW_PACKAGE}" >&2
+            NPX_BIN=$(command -v npx)
+            if [ -z "${NPX_BIN}" ]; then
+                echo "Error: npx not found in PATH" >&2
+                exit 1
+            fi
+            NPX_REAL=$(resolve_path "${NPX_BIN}")
+            run_macos_sandbox "${NPX_REAL}" "${FLOW_PACKAGE}" ${FLOW_ARGS[@]+"${FLOW_ARGS[@]}"}
+        fi
+    else
+        # Normal mode - run claude
+        run_macos_sandbox "${CLAUDE_REAL}" ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}
+    fi
+
+    # Should never reach here due to exec
+    exit 0
+fi
+
+# ============================================================================
+# Linux Sandbox Implementation (using bubblewrap + AppArmor + seccomp)
+# ============================================================================
+
+# Verify we're on Linux (if not macOS and not Linux, exit)
+if [[ "${OS_TYPE}" != "Linux" ]]; then
+    echo "Error: Unsupported operating system: ${OS_TYPE}" >&2
+    echo "Supported platforms: Linux, Darwin (macOS)" >&2
     exit 1
 fi
 
-# Find the Claude CLI script
-CLAUDE_BIN=$(command -v claude)
-if [ -z "${CLAUDE_BIN}" ]; then
-    echo "Error: claude not found in PATH" >&2
+# Check for bwrap availability
+if ! command -v bwrap >/dev/null 2>&1; then
+    echo "Error: bubblewrap (bwrap) not found. Please install it:" >&2
+    echo "  Debian/Ubuntu: sudo apt install bubblewrap" >&2
+    echo "  Fedora: sudo dnf install bubblewrap" >&2
+    echo "  Arch: sudo pacman -S bubblewrap" >&2
     exit 1
 fi
-
-# Resolve to the actual CLI script
-CLAUDE_CLI=$(readlink -f "${CLAUDE_BIN}")
-
-# We'll run: bun <claude-cli> <args>
-BUN_REAL=$(readlink -f "${BUN_BIN}")
 
 # Build the bwrap command - start with base system bindings
 BWRAP_ARGS=(
@@ -245,6 +555,7 @@ fi
 
 # JavaScript/Node runtimes
 [[ -d "${HOME}/.nvm" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.nvm" "${HOME}/.nvm")
+[[ -d "${HOME}/.npm" ]] && BWRAP_ARGS+=(--bind "${HOME}/.npm" "${HOME}/.npm")
 [[ -d "${HOME}/.bun" ]] && BWRAP_ARGS+=(--bind "${HOME}/.bun" "${HOME}/.bun")
 
 # Clojure configuration and cache
@@ -259,6 +570,17 @@ fi
 # Git configuration (read-only)
 [[ -f "${HOME}/.gitconfig" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.gitconfig" "${HOME}/.gitconfig")
 [[ -d "${HOME}/.config/git" ]] && BWRAP_ARGS+=(--ro-bind "${HOME}/.config/git" "${HOME}/.config/git")
+
+# GitHub/GitLab CLI configuration (read-write for auth tokens)
+for cli_config_dir in "gh" "glab-cli"; do
+    dir_path="${HOME}/.config/${cli_config_dir}"
+    if [[ -d "${dir_path}" ]]; then
+        BWRAP_ARGS+=(--bind "${dir_path}" "${dir_path}")
+    elif [[ ! -e "${dir_path}" ]]; then
+        mkdir -p "${dir_path}"
+        BWRAP_ARGS+=(--bind "${dir_path}" "${dir_path}")
+    fi
+done
 
 # Nix store and configuration (if exists)
 if [[ -d /nix ]]; then
@@ -293,9 +615,9 @@ if [[ -d "${CLAUDE_DIR}/ssh" ]]; then
     BWRAP_ARGS+=(--bind "${CLAUDE_DIR}/ssh" "${HOME}/.ssh")
 fi
 
-# Claude-flow directories (read-write, for cross-project memory and coordination)
-for claude_flow_dir in ".swarm" ".claude-flow" ".hive-mind"; do
-    dir_path="${HOME}/${claude_flow_dir}"
+# Ruflo directories (read-write, for cross-project memory and coordination)
+for ruflo_dir in ".swarm" ".claude-flow" ".hive-mind"; do
+    dir_path="${HOME}/${ruflo_dir}"
     if [[ -d "${dir_path}" ]]; then
         BWRAP_ARGS+=(--bind "${dir_path}" "${dir_path}")
     elif [[ ! -e "${dir_path}" ]]; then
@@ -438,34 +760,36 @@ elif [[ -n "${SECCOMP_GENERATOR}" ]] && [[ ! -e /proc/sys/kernel/seccomp ]]; the
     echo "Continuing with bubblewrap + AppArmor protection only" >&2
 fi
 
-# Execute claude with all arguments using bwrap isolation
+# Execute claude with all arguments using bwrap isolation (Linux)
 # AppArmor profile is applied automatically via path-based profile matching
-# Run: bun <cli.js> <args>
 if [[ -n "${DEBUG_COMMAND}" ]]; then
     # Debug mode - run arbitrary command
     exec bwrap "${BWRAP_ARGS[@]}" /bin/bash -c "${DEBUG_COMMAND}"
 elif [[ "${FLOW_MODE}" == "true" ]]; then
-    # Flow mode - run claude-flow
-    # First try to find globally installed claude-flow
-    CLAUDE_FLOW_BIN=""
-    if [[ -x "${HOME}/.bun/bin/claude-flow" ]]; then
-        CLAUDE_FLOW_BIN="${HOME}/.bun/bin/claude-flow"
-    elif command -v claude-flow >/dev/null 2>&1; then
-        CLAUDE_FLOW_BIN=$(command -v claude-flow)
+    # Flow mode - run ruflo
+    RUFLO_BIN=""
+    if command -v ruflo >/dev/null 2>&1; then
+        RUFLO_BIN=$(command -v ruflo)
     fi
 
-    if [[ -n "${CLAUDE_FLOW_BIN}" ]]; then
-        # Use globally installed claude-flow
-        CLAUDE_FLOW_REAL=$(readlink -f "${CLAUDE_FLOW_BIN}")
-        exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" "${CLAUDE_FLOW_REAL}" "${FLOW_ARGS[@]}"
+    if [[ -n "${RUFLO_BIN}" ]]; then
+        # Use globally installed ruflo
+        RUFLO_REAL=$(readlink -f "${RUFLO_BIN}")
+        exec bwrap "${BWRAP_ARGS[@]}" "${RUFLO_REAL}" "${FLOW_ARGS[@]}"
     else
-        # Fallback: Use bun x to fetch package
-        # Support CLAUDE_FLOW_PACKAGE env var for custom package/branch
-        FLOW_PACKAGE="${CLAUDE_FLOW_PACKAGE:-claude-flow@latest}"
-        echo "Warning: claude-flow not found globally, using: bun x ${FLOW_PACKAGE}" >&2
-        exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" x "${FLOW_PACKAGE}" "${FLOW_ARGS[@]}"
+        # Fallback: Use npx to fetch package
+        # Support RUFLO_PACKAGE env var for custom package/branch
+        FLOW_PACKAGE="${RUFLO_PACKAGE:-ruflo@latest}"
+        echo "Warning: ruflo not found globally, using: npx ${FLOW_PACKAGE}" >&2
+        NPX_BIN=$(command -v npx)
+        if [ -z "${NPX_BIN}" ]; then
+            echo "Error: npx not found in PATH" >&2
+            exit 1
+        fi
+        NPX_REAL=$(readlink -f "${NPX_BIN}")
+        exec bwrap "${BWRAP_ARGS[@]}" "${NPX_REAL}" "${FLOW_PACKAGE}" "${FLOW_ARGS[@]}"
     fi
 else
     # Normal mode - run claude
-    exec bwrap "${BWRAP_ARGS[@]}" "${BUN_REAL}" "${CLAUDE_CLI}" "${CLAUDE_ARGS[@]}"
+    exec bwrap "${BWRAP_ARGS[@]}" "${CLAUDE_REAL}" "${CLAUDE_ARGS[@]}"
 fi
