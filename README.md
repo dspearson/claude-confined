@@ -10,12 +10,17 @@ Take back control.
 
 ## Overview
 
-Run Claude Code in a sandboxed environment using bubblewrap, AppArmor, and seccomp filters to restrict filesystem access, prevent credential leakage, and limit system capabilities.
+Run Claude Code in a sandboxed environment to restrict filesystem access, prevent credential leakage, and limit system capabilities.
 
-**Security layers:**
+**Security layers (Linux):**
 - **Bubblewrap** - User namespace containerization and filesystem isolation
 - **AppArmor** - Mandatory Access Control (MAC) with explicit deny rules for sensitive files
 - **Seccomp** - Berkeley Packet Filter (BPF) syscall filtering
+
+**Security layers (macOS):**
+- **sandbox-exec** - Seatbelt profile with whitelist-only filesystem access (no broad HOME read)
+- **Process execution whitelist** - Only allowed binaries can run; sudo/su/mount/diskutil blocked
+- **Credential isolation** - Keychains, SSH keys, cloud credentials, shell histories all inaccessible
 
 ## Requirements
 
@@ -40,8 +45,8 @@ Run Claude Code in a sandboxed environment using bubblewrap, AppArmor, and secco
 
 The installer will automatically install these if they're not found:
 
-- **bun** - JavaScript runtime (installed via official installer)
-- **Claude Code** - Installed via `bun install -g @anthropic-ai/claude-code`
+- **Node.js** - JavaScript runtime
+- **Claude Code** - Installed via `npm install -g @anthropic-ai/claude-code`
 
 ## Installation
 
@@ -130,9 +135,9 @@ claude-confined --bash "cat /proc/self/status"
 DANGEROUSLY_SKIP_PERMISSIONS=1 claude-confined
 ```
 
-## Claude-Flow Integration
+## Ruflo Integration
 
-Claude-confined includes first-class support for [claude-flow](https://github.com/ruvnet/claude-flow), an AI orchestration platform with swarm intelligence and persistent memory.
+Claude-confined includes first-class support for [ruflo](https://github.com/ruvnet/ruflo), an AI orchestration platform with swarm intelligence and persistent memory.
 
 **What's included:**
 - `~/.swarm/` - Cross-project memory and AgentDB storage (bind-mounted by default)
@@ -142,18 +147,18 @@ Claude-confined includes first-class support for [claude-flow](https://github.co
 **Quick start:**
 
 ```bash
-# Install claude-flow globally
-bun install -g claude-flow@alpha
+# Install ruflo globally
+npm install -g ruflo@alpha
 
-# Add claude-flow MCP server (for use within Claude)
-claude mcp add claude-flow claude-flow mcp start
+# Add ruflo MCP server (for use within Claude)
+claude mcp add ruflo ruflo mcp start
 
-# Method 1: Use claude-flow CLI directly (sandboxed)
+# Method 1: Use ruflo CLI directly (sandboxed)
 cd ~/my-project
 claude-confined --flow --version
 claude-confined --flow memory store api_key "REST endpoints" --namespace backend
 claude-confined --flow memory query "API" --namespace backend
-claude-confined --flow swarm "build authentication" --claude
+claude-confined --flow swarm "build authentication"
 
 # Method 2: Use within Claude Code (memory persists across all projects!)
 cd ~/my-project
@@ -199,30 +204,37 @@ See [emacs/EMACS.md](emacs/EMACS.md) for complete installation and usage instruc
 - **`~/.claude/`** - Full read/write (Claude state, temporary files, logs)
 - **`~/.config/claude/`** - Read/write (Claude configuration)
 - **`~/.claude/ssh/`** - Mapped to `~/.ssh` inside sandbox (if directory exists)
-- **`~/.swarm/`** - Read/write (claude-flow memory and AgentDB storage)
-- **`~/.claude-flow/`** - Read/write (claude-flow configuration and state)
-- **`~/.hive-mind/`** - Read/write (claude-flow hive-mind sessions)
+- **`~/.swarm/`** - Read/write (ruflo memory and AgentDB storage)
+- **`~/.claude-flow/`** - Read/write (ruflo configuration and state)
+- **`~/.hive-mind/`** - Read/write (ruflo hive-mind sessions)
+- **`~/.config/gh/`** - Read/write (GitHub CLI configuration)
+- **`~/.config/glab-cli/`** - Read/write (GitLab CLI configuration)
 - **System binaries** - Read/execute only (`/usr`, `/bin`, `/lib`, etc.)
 - **Nix store** - Read/execute only (if `/nix` exists)
 - **Additional paths** - Via `--allow` or `--ro-allow` flags
 
-**Explicitly denied:**
+**Not accessible (whitelist model — everything not listed above is blocked):**
 
-- **`~/.ssh/`** - SSH keys (host directory, use `~/.claude/ssh/` instead)
+On both Linux and macOS, only explicitly whitelisted paths are accessible. This includes blocking:
+
+- **`~/.ssh/`** - SSH keys (on Linux, use `~/.claude/ssh/` instead)
 - **`~/.gnupg/`** - GPG keys
-- **`~/.aws/`, `~/.docker/`, `~/.kube/`** - Cloud credentials
+- **`~/.aws/`, `~/.docker/`, `~/.kube/`, `~/.azure/`** - Cloud credentials
 - **`~/.bash_history`, `~/.zsh_history`** - Shell history files
 - **`~/.netrc`, `~/.pypirc`, `~/.npmrc`** - Package manager credentials
 - **`~/.cargo/credentials`** - Rust package credentials
-- **`/etc/shadow`, `/etc/sudoers`** - System sensitive files
-- **`/root/`** - Root user directory
+- **`/etc/shadow`, `/etc/sudoers`** - System sensitive files (Linux)
+- **`/etc/master.passwd`** - System sensitive files (macOS)
+- **`~/Library/Keychains/`** - macOS Keychain databases
+- **`~/Library/Mail/`, `~/Library/Messages/`, `~/Library/Safari/`** - macOS personal data
+- **`~/Desktop/`, `~/Documents/`, `~/Downloads/`** - User directories (not in whitelist)
 
 ### Process Capabilities
 
-- **Cannot execute** `sudo`, `su`, `mount`, `umount`
+- **Cannot execute** `sudo`, `su`, `mount`, `umount`, `diskutil`, `security` (macOS keychain CLI)
 - **Cannot access** other users' files
-- **Runs in isolated namespaces** (UTS, IPC, user)
-- **No dangerous capabilities** inside namespace
+- **Linux:** Runs in isolated namespaces (UTS, IPC, user) with no dangerous capabilities
+- **macOS:** Runs under sandbox-exec with process execution whitelist
 
 ### Network Access
 

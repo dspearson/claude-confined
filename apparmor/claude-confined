@@ -104,7 +104,13 @@ profile claude-confined @{HOME}/.local/bin/claude-confined flags=(enforce) {
   owner @{HOME}/.config/claude/ rw,
   owner @{HOME}/.config/claude/** rw,
 
-  # Claude-flow directories (read-write, for cross-project memory and coordination)
+  # GitHub/GitLab CLI configuration (read-write)
+  owner @{HOME}/.config/gh/ rw,
+  owner @{HOME}/.config/gh/** rw,
+  owner @{HOME}/.config/glab-cli/ rw,
+  owner @{HOME}/.config/glab-cli/** rw,
+
+  # Ruflo directories (read-write, for cross-project memory and coordination)
   owner @{HOME}/.swarm/ rw,
   owner @{HOME}/.swarm/** rw,
   owner @{HOME}/.claude-flow/ rw,
@@ -127,6 +133,10 @@ profile claude-confined @{HOME}/.local/bin/claude-confined flags=(enforce) {
   owner @{HOME}/.rustup/** rix,
   owner @{HOME}/.nix-profile/bin/ r,
   owner @{HOME}/.nix-profile/bin/** rix,
+
+  # Node/npm cache
+  owner @{HOME}/.npm/ rw,
+  owner @{HOME}/.npm/** rwlk,
 
   # Bun runtime
   owner @{HOME}/.bun/ rw,
@@ -303,10 +313,16 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
     owner @{HOME}/.config/claude/ r,
     owner @{HOME}/.config/claude/** rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.claude.json* rwlkmpix -> &claude-confined-unpriv,
+
+    # GitHub/GitLab CLI configuration (read-write)
+    owner @{HOME}/.config/gh/ r,
+    owner @{HOME}/.config/gh/** rwlkmpix -> &claude-confined-unpriv,
+    owner @{HOME}/.config/glab-cli/ r,
+    owner @{HOME}/.config/glab-cli/** rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.claude.json.lock/ r,
     owner @{HOME}/.claude.json.lock/** rwlkmpix -> &claude-confined-unpriv,
 
-    # Claude-flow directories (read-write, for cross-project memory and coordination)
+    # Ruflo directories (read-write, for cross-project memory and coordination)
     owner @{HOME}/.swarm/ r,
     owner @{HOME}/.swarm/** rwlkmpix -> &claude-confined-unpriv,
     owner @{HOME}/.claude-flow/ r,
@@ -331,6 +347,10 @@ profile claude-confined-unpriv flags=(attach_disconnected,mediate_deleted) {
     # Rustup toolchain manager
     owner @{HOME}/.rustup/ r,
     owner @{HOME}/.rustup/** rwlkmpix -> &claude-confined-unpriv,
+
+    # Node/npm cache
+    owner @{HOME}/.npm/ r,
+    owner @{HOME}/.npm/** rwlkmpix -> &claude-confined-unpriv,
 
     # Bun runtime (with directory access, write for caches/locks, execute for vendored binaries)
     # REQUIRED FOR COLORS: Execute permission (pix) needed for vendored binaries like ripgrep
