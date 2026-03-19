@@ -233,8 +233,8 @@ generate_macos_sandbox_profile() {
     profile+="(deny process-exec (literal \"/usr/sbin/diskutil\"))"$'\n'
     profile+="(deny process-exec (literal \"/usr/bin/security\"))"$'\n'
 
-    # Allow signals within sandbox only
-    profile+="(allow signal (target same-sandbox))"$'\n'
+    # Allow signals to own process only (not other sandbox processes)
+    profile+="(allow signal (target self))"$'\n'
 
     # ========================================================================
     # System read access (equivalent to bwrap ro-bind)
@@ -260,8 +260,8 @@ generate_macos_sandbox_profile() {
     profile+="(allow file-read* (subpath \"/opt/homebrew\"))"$'\n'
     profile+="(allow file-read* (subpath \"/usr/local\"))"$'\n'
 
-    # Dev devices
-    profile+="(allow file-write* (literal \"/dev/null\"))"$'\n'
+    # Dev devices - require CHARACTER-DEVICE vnode type to prevent symlink attacks
+    profile+="(allow file-write-data (require-all (path \"/dev/null\") (vnode-type CHARACTER-DEVICE)))"$'\n'
     profile+="(allow file-write* (regex #\"^/dev/ttys[0-9]+$\"))"$'\n'
     profile+="(allow file-write* (literal \"/dev/ptmx\"))"$'\n'
     profile+="(allow file-read* (regex #\"^/dev/ttys[0-9]+$\"))"$'\n'
@@ -315,6 +315,11 @@ generate_macos_sandbox_profile() {
     # Bun runtime (read-write, kept for tools that still use bun)
     profile+="(allow file-read* (subpath \"${HOME}/.bun\"))"$'\n'
     profile+="(allow file-write* (subpath \"${HOME}/.bun\"))"$'\n'
+
+    # Python (pyenv - needs write for shim rehash)
+    profile+="(allow file-read* (subpath \"${HOME}/.pyenv\"))"$'\n'
+    profile+="(allow file-write* (subpath \"${HOME}/.pyenv\"))"$'\n'
+    profile+="(allow process-exec (subpath \"${HOME}/.pyenv\"))"$'\n'
 
     # JavaScript/Node
     profile+="(allow file-read* (subpath \"${HOME}/.nvm\"))"$'\n'
@@ -393,10 +398,67 @@ generate_macos_sandbox_profile() {
     # ========================================================================
     # System services
     # ========================================================================
+    # Mach IPC - needed for DNS resolution, TLS (Security framework), and
+    # other system services that Node.js/Claude depend on. Restricting to
+    # individual service names is fragile (they vary by macOS version).
     profile+="(allow mach-lookup)"$'\n'
-    profile+="(allow sysctl-read)"$'\n'
-    profile+="(allow iokit-open)"$'\n'
-    profile+="(allow user-preference-read)"$'\n'
+
+    # Sysctl whitelist - only expose hardware/OS info needed by runtimes.
+    # Inspired by Chrome's sandbox and OpenAI's Codex seatbelt profile.
+    profile+="(allow sysctl-read"$'\n'
+    profile+="  (sysctl-name \"hw.activecpu\")"$'\n'
+    profile+="  (sysctl-name \"hw.busfrequency_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.byteorder\")"$'\n'
+    profile+="  (sysctl-name \"hw.cacheconfig\")"$'\n'
+    profile+="  (sysctl-name \"hw.cachelinesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.cpufamily\")"$'\n'
+    profile+="  (sysctl-name \"hw.cpufrequency_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.cputype\")"$'\n'
+    profile+="  (sysctl-name \"hw.l1dcachesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.l1icachesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.l2cachesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.l3cachesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.logicalcpu\")"$'\n'
+    profile+="  (sysctl-name \"hw.logicalcpu_max\")"$'\n'
+    profile+="  (sysctl-name \"hw.machine\")"$'\n'
+    profile+="  (sysctl-name \"hw.memsize\")"$'\n'
+    profile+="  (sysctl-name \"hw.ncpu\")"$'\n'
+    profile+="  (sysctl-name \"hw.nperflevels\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_BF16\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_DotProd\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_FCMA\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_FHM\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_FP16\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_I8MM\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_JSCVT\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_LSE\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_RDM\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.arm.FEAT_SHA512\")"$'\n'
+    profile+="  (sysctl-name \"hw.optional.armv8_2_sha512\")"$'\n'
+    profile+="  (sysctl-name \"hw.pagesize\")"$'\n'
+    profile+="  (sysctl-name \"hw.pagesize_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.packages\")"$'\n'
+    profile+="  (sysctl-name \"hw.physicalcpu\")"$'\n'
+    profile+="  (sysctl-name \"hw.physicalcpu_max\")"$'\n'
+    profile+="  (sysctl-name \"hw.tbfrequency_compat\")"$'\n'
+    profile+="  (sysctl-name \"hw.vectorunit\")"$'\n'
+    profile+="  (sysctl-name-prefix \"hw.perflevel\")"$'\n'
+    profile+="  (sysctl-name \"kern.hostname\")"$'\n'
+    profile+="  (sysctl-name \"kern.maxfilesperproc\")"$'\n'
+    profile+="  (sysctl-name \"kern.osproductversion\")"$'\n'
+    profile+="  (sysctl-name \"kern.osrelease\")"$'\n'
+    profile+="  (sysctl-name \"kern.ostype\")"$'\n'
+    profile+="  (sysctl-name \"kern.osvariant_status\")"$'\n'
+    profile+="  (sysctl-name \"kern.osversion\")"$'\n'
+    profile+="  (sysctl-name \"kern.secure_kernel\")"$'\n'
+    profile+="  (sysctl-name \"kern.usrstack64\")"$'\n'
+    profile+="  (sysctl-name \"kern.version\")"$'\n'
+    profile+="  (sysctl-name \"sysctl.proc_cputype\")"$'\n'
+    profile+="  (sysctl-name \"kern.argmax\")"$'\n'
+    profile+="  (sysctl-name \"kern.proc.pid.\")"$'\n'
+    profile+="  (sysctl-name-prefix \"kern.proc.\")"$'\n'
+    profile+="  (sysctl-name-prefix \"net.\")"$'\n'
+    profile+=")"$'\n'
 
     # Process info
     profile+="(allow process-info-pidinfo)"$'\n'
